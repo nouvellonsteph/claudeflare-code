@@ -4,7 +4,7 @@
 		"lib": ["es2021"],
 		"module": "es2022",
 		"moduleResolution": "Bundler",
-		"types": ["./worker-configuration.d.ts", "node"],
+		"types": ["node"],
 		"resolveJsonModule": true,
 		"allowJs": true,
 		"checkJs": false,
