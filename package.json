@@ -42,14 +42,19 @@
     "hono": "4.11.1"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.18.4",
     "@types/node": "^22.0.0",
     "typescript": "5.9.3",
+    "vitest": "^3.2.7",
     "wrangler": "^4.107.1"
   },
   "scripts": {
     "cf-typegen": "wrangler types",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "start": "wrangler dev"
+    "start": "wrangler dev",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
   }
 }
