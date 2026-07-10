@@ -49,11 +49,14 @@
   },
   "scripts": {
     "cf-typegen": "wrangler types",
-    "deploy": "wrangler deploy",
+    "build:ui": "cd ui && npm run build",
+    "dev:ui": "cd ui && npm run dev",
+    "deploy": "npm run build:ui && wrangler deploy",
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "typecheck:ui": "cd ui && npx tsc --noEmit"
   }
 }
