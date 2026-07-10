@@ -7,7 +7,7 @@
 // Two subsystems:
 //
 // 1. AIG PROXY — translates Anthropic Messages API ↔ OpenAI Chat Completions
-//    and calls AI Gateway via the Workers AI binding (env.AI.run). Handles
+//    and calls AI Gateway via fetch() to /compat/chat/completions. Handles
 //    auth, metadata injection, max_tokens clamping, and response format
 //    translation. Routes: POST /v1/messages, GET /v1/models, GET /health
 //
@@ -24,7 +24,7 @@
 //                                                  └── claude CLI
 //                                                       └── http://anthropic.proxy
 //                                                            └── outboundByHost
-//                                                                 └── AIG Proxy ──► env.AI.run ──► AI Gateway
+//                                                                 └── AIG Proxy ──► fetch() ──► AI Gateway /compat
 //
 // See ARCHITECTURE.md for full details.
 // ---------------------------------------------------------------------------
@@ -374,12 +374,15 @@ ClaudeCodeContainer.outboundByHost = {
 
 		// If no complexity yet for this session and classification is enabled,
 		// fire-and-forget the classifier via AI Gateway.
-		if (!complexity && stub && env.AI && parsedBody) {
-			const taskText = extractTaskText(parsedBody);
-			if (taskText && shouldClassifyComplexity(true, 1, user)) {
-				// Fire-and-forget: classify async, don't block the proxy response
-				ctx.waitUntil(
-					(async () => {
+		// NOTE: ctx.waitUntil may not be available in the outboundByHost context
+		// (ContainerProxy isolate). If unavailable, run as a detached promise.
+		// This entire block is wrapped in try/catch so classification failures
+		// never crash the main proxy path.
+		try {
+			if (!complexity && stub && env.AI && parsedBody) {
+				const taskText = extractTaskText(parsedBody);
+				if (taskText && shouldClassifyComplexity(true, 1, user)) {
+					const classifyTask = (async () => {
 						try {
 							const result: any = await env.AI.run(
 								COMPLEXITY_MODEL as any,
@@ -414,9 +417,16 @@ ClaudeCodeContainer.outboundByHost = {
 						} catch (err) {
 							console.error("[complexity] Async classification failed:", err);
 						}
-					})(),
-				);
+					})();
+
+					// Use waitUntil if available, otherwise let the promise run detached
+					if (typeof ctx?.waitUntil === "function") {
+						ctx.waitUntil(classifyTask);
+					}
+				}
 			}
+		} catch (err) {
+			console.error("[complexity] Classification setup failed:", err);
 		}
 
 		return handleProxy(proxyRequest, env, { skipAuth: true, user, sessionId, complexity: complexity as Complexity | null });
@@ -430,7 +440,7 @@ ClaudeCodeContainer.outbound = async (request: Request, env: Env, ctx: any) => {
 };
 
 // ---------------------------------------------------------------------------
-// AIG proxy logic — all inference via env.AI.run() (Workers AI binding)
+// AIG proxy logic — main inference via fetch() to AI Gateway /compat endpoint
 // ---------------------------------------------------------------------------
 
 async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boolean; user?: string; sessionId?: string | null; complexity?: Complexity | null }): Promise<Response> {
