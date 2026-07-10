@@ -172,6 +172,151 @@ describe("translateOpenAIToAnthropic", () => {
 		const result = translateOpenAIToAnthropic({}, "route");
 		expect(result.content[0].text).toBe("");
 	});
+
+	it("translates tool_calls to Anthropic tool_use blocks", () => {
+		const oai = {
+			id: "chatcmpl-456",
+			model: "gpt-4",
+			choices: [
+				{
+					message: {
+						content: "Let me check that.",
+						tool_calls: [
+							{
+								id: "call_abc123",
+								type: "function",
+								function: {
+									name: "Bash",
+									arguments: '{"command":"ls -la"}',
+								},
+							},
+						],
+					},
+					finish_reason: "tool_calls",
+				},
+			],
+			usage: { prompt_tokens: 20, completion_tokens: 10 },
+		};
+		const result = translateOpenAIToAnthropic(oai, "route");
+		expect(result.content).toHaveLength(2);
+		expect(result.content[0]).toEqual({ type: "text", text: "Let me check that." });
+		expect(result.content[1]).toEqual({
+			type: "tool_use",
+			id: "call_abc123",
+			name: "Bash",
+			input: { command: "ls -la" },
+		});
+		expect(result.stop_reason).toBe("tool_use");
+	});
+
+	it("translates tool_calls with no text content", () => {
+		const oai = {
+			choices: [
+				{
+					message: {
+						content: null,
+						tool_calls: [
+							{
+								id: "call_xyz",
+								type: "function",
+								function: {
+									name: "Read",
+									arguments: '{"path":"/tmp/file.txt"}',
+								},
+							},
+						],
+					},
+					finish_reason: "tool_calls",
+				},
+			],
+		};
+		const result = translateOpenAIToAnthropic(oai, "route");
+		expect(result.content).toHaveLength(1);
+		expect(result.content[0].type).toBe("tool_use");
+		expect(result.content[0].name).toBe("Read");
+	});
+
+	it("translates multiple tool_calls", () => {
+		const oai = {
+			choices: [
+				{
+					message: {
+						content: null,
+						tool_calls: [
+							{
+								id: "call_1",
+								type: "function",
+								function: { name: "Bash", arguments: '{"command":"pwd"}' },
+							},
+							{
+								id: "call_2",
+								type: "function",
+								function: { name: "Read", arguments: '{"path":"."}' },
+							},
+						],
+					},
+					finish_reason: "tool_calls",
+				},
+			],
+		};
+		const result = translateOpenAIToAnthropic(oai, "route");
+		expect(result.content).toHaveLength(2);
+		expect(result.content[0].name).toBe("Bash");
+		expect(result.content[1].name).toBe("Read");
+		expect(result.stop_reason).toBe("tool_use");
+	});
+});
+
+describe("translateAnthropicToOpenAI — tool messages", () => {
+	it("converts assistant tool_use blocks to OpenAI tool_calls", () => {
+		const result = translateAnthropicToOpenAI({
+			messages: [
+				{
+					role: "assistant",
+					content: [
+						{ type: "text", text: "Let me check." },
+						{
+							type: "tool_use",
+							id: "toolu_abc",
+							name: "Bash",
+							input: { command: "ls" },
+						},
+					],
+				},
+			],
+		});
+		expect(result).toHaveLength(1);
+		const msg = result[0] as any;
+		expect(msg.role).toBe("assistant");
+		expect(msg.content).toBe("Let me check.");
+		expect(msg.tool_calls).toHaveLength(1);
+		expect(msg.tool_calls[0].id).toBe("toolu_abc");
+		expect(msg.tool_calls[0].function.name).toBe("Bash");
+		expect(msg.tool_calls[0].function.arguments).toBe('{"command":"ls"}');
+	});
+
+	it("converts user tool_result blocks to OpenAI tool messages", () => {
+		const result = translateAnthropicToOpenAI({
+			messages: [
+				{
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: "toolu_abc",
+							content: "file1.txt\nfile2.txt",
+						},
+					],
+				},
+			],
+		});
+		expect(result).toHaveLength(1);
+		expect(result[0]).toEqual({
+			role: "tool",
+			tool_call_id: "toolu_abc",
+			content: "file1.txt\nfile2.txt",
+		});
+	});
 });
 
 // ---------------------------------------------------------------------------

@@ -481,6 +481,20 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 				stream: false,
 				...(maxTokens != null ? { max_tokens: maxTokens } : {}),
 				...(body.temperature != null ? { temperature: body.temperature } : {}),
+				// Forward tool definitions (Anthropic → OpenAI function calling format)
+				...(body.tools?.length
+					? {
+							tools: body.tools.map((t: any) => ({
+								type: "function",
+								function: {
+									name: t.name,
+									description: t.description || "",
+									parameters: t.input_schema || {},
+								},
+							})),
+						}
+					: {}),
+				...(body.tool_choice ? { tool_choice: body.tool_choice === "auto" ? "auto" : body.tool_choice === "any" ? "required" : body.tool_choice } : {}),
 			}),
 		},
 	);
