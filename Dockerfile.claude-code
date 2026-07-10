@@ -1,8 +1,14 @@
 # ---------------------------------------------------------------------------
-# Claudeflare Code — container image
+# Claudeflare Code — container image (IDE mode)
 #
-# Runs Claude Code CLI inside ttyd (web-based terminal). All API calls are
-# routed through the AIG proxy Worker via outbound interception.
+# Runs Claude Code CLI, an auxiliary terminal, a file server, and a preview
+# proxy — all managed by the entrypoint via background processes.
+#
+# Ports (all proxied by the Worker):
+#   8080  — ttyd: Claude Code main terminal
+#   8081  — ttyd: auxiliary shell terminal
+#   8082  — Node file-server API (browse /workspace)
+#   8083  — Preview proxy (user's dev server, e.g. port 3000/5173/8000)
 # ---------------------------------------------------------------------------
 
 FROM node:22-bookworm-slim
@@ -14,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     bash \
     tmux \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Install ttyd (web terminal)
@@ -36,6 +43,10 @@ RUN mkdir -p /home/coder/.claude
 COPY container_src/claude-settings.json /home/coder/.claude/settings.json
 RUN chown -R coder:coder /home/coder/.claude
 
+# Copy file server and preview proxy
+COPY container_src/fileserver.js /opt/fileserver.js
+COPY container_src/preview-proxy.js /opt/preview-proxy.js
+
 # Copy entrypoint
 COPY container_src/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
@@ -43,6 +54,6 @@ RUN chmod +x /entrypoint.sh
 USER coder
 WORKDIR /workspace
 
-EXPOSE 8080
+EXPOSE 8080 8081 8082 8083
 
 ENTRYPOINT ["/entrypoint.sh"]

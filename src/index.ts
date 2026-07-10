@@ -7,9 +7,9 @@
 // Two subsystems:
 //
 // 1. AIG PROXY — translates Anthropic Messages API ↔ OpenAI Chat Completions
-//    and forwards to Cloudflare AI Gateway's /compat endpoint. Handles auth,
-//    metadata injection, max_tokens clamping, and response format translation.
-//    Routes: POST /v1/messages, GET /v1/models, GET /health
+//    and calls AI Gateway via the Workers AI binding (env.AI.run). Handles
+//    auth, metadata injection, max_tokens clamping, and response format
+//    translation. Routes: POST /v1/messages, GET /v1/models, GET /health
 //
 // 2. CONTAINER TERMINAL — per-user web terminals running Claude Code CLI in
 //    Cloudflare Containers, authenticated via Cloudflare Access. Each user
@@ -24,12 +24,12 @@
 //                                                  └── claude CLI
 //                                                       └── http://anthropic.proxy
 //                                                            └── outboundByHost
-//                                                                 └── AIG Proxy ──► AI Gateway
+//                                                                 └── AIG Proxy ──► env.AI.run ──► AI Gateway
 //
 // See ARCHITECTURE.md for full details.
 // ---------------------------------------------------------------------------
 
-import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
+import { Container, ContainerProxy, getContainer, switchPort } from "@cloudflare/containers";
 import { env as globalEnv } from "cloudflare:workers";
 import { Hono } from "hono";
 import {
@@ -165,8 +165,10 @@ async function verifyAccessJwt(request: Request, aud: string, certsUrl: string):
 // Constants
 // ---------------------------------------------------------------------------
 
-// AI Gateway dynamic route — set this to match your AI Gateway configuration.
-// Format: "dynamic/<gateway-id>" routes through AI Gateway's model router.
+// AI Gateway dynamic route — resolved by AI Gateway's model router.
+// All inference (main proxy + complexity classification) goes through
+// env.AI.run() with gateway options so routing, logging, caching, and
+// metadata are handled uniformly via the Workers AI binding.
 const ROUTE = `dynamic/${globalEnv.GATEWAY_ID}`;
 
 // ---------------------------------------------------------------------------
@@ -363,7 +365,7 @@ ClaudeCodeContainer.outbound = async (request: Request, env: Env, ctx: any) => {
 };
 
 // ---------------------------------------------------------------------------
-// AIG proxy logic
+// AIG proxy logic — all inference via env.AI.run() (Workers AI binding)
 // ---------------------------------------------------------------------------
 
 async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boolean; user?: string; complexity?: Complexity | null }): Promise<Response> {
@@ -458,9 +460,10 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 	// ---- Translate Anthropic → OpenAI ----
 	const messages = translateAnthropicToOpenAI(body);
 
-	// ---- Call AI Gateway /compat ----
+	// ---- Call via Workers AI binding (env.AI.run) ----
+	// Routes through AI Gateway for logging, caching, and dynamic routing.
 	// Claude Code requests max_tokens=64000+ for Claude models, but the
-	// backing Workers AI model has a much smaller context window.
+	// backing model may have a smaller context window.
 	// Clamp to a safe ceiling so the request doesn't get rejected.
 	const maxTokens = clampMaxTokens(body.max_tokens);
 	const wantsStream = body.stream === true;
@@ -483,63 +486,63 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 		? { tool_choice: body.tool_choice === "auto" ? "auto" : body.tool_choice === "any" ? "required" : body.tool_choice }
 		: {};
 
-	const resp = await fetch(
-		`https://gateway.ai.cloudflare.com/v1/${env.CLOUDFLARE_ACCOUNT_ID}/${env.GATEWAY_ID}/compat/chat/completions`,
-		{
-			method: "POST",
-			headers: {
-				"content-type": "application/json",
-				"cf-aig-authorization": `Bearer ${env.CF_AIG_TOKEN}`,
-				"cf-aig-metadata": JSON.stringify(metadata),
-				// Cache identical requests for 5 minutes (300s) at AI Gateway.
-				// Serves repeated prompts from edge cache, saving latency + cost.
-				"cf-aig-cache-ttl": "300",
-			},
-			body: JSON.stringify({
-				model: ROUTE,
-				messages,
-				stream: wantsStream,
-				...(maxTokens != null ? { max_tokens: maxTokens } : {}),
-				...(body.temperature != null ? { temperature: body.temperature } : {}),
-				...toolsPayload,
-				...toolChoicePayload,
-			}),
+	// Gateway options: metadata, caching, and routing via the AI binding.
+	const gatewayOpts = {
+		gateway: {
+			id: env.GATEWAY_ID,
+			skipCache: false,
+			cacheTtl: 300,
+			metadata,
 		},
-	);
+	};
 
-	// ---- Streaming path ----
-	if (wantsStream) {
-		if (!resp.ok || !resp.body) {
-			const errBody = await resp.text();
-			console.error(`AIG proxy stream error: status=${resp.status}`, errBody);
-			return new Response(errBody, {
-				status: resp.status,
-				headers: { "content-type": "application/json" },
+	const aiInput = {
+		messages,
+		stream: wantsStream,
+		...(maxTokens != null ? { max_tokens: maxTokens } : {}),
+		...(body.temperature != null ? { temperature: body.temperature } : {}),
+		...toolsPayload,
+		...toolChoicePayload,
+	};
+
+	try {
+		const result: any = await env.AI.run(ROUTE as any, aiInput, gatewayOpts);
+
+		// ---- Streaming path ----
+		if (wantsStream) {
+			// env.AI.run with stream:true returns a ReadableStream of SSE chunks
+			if (!result || typeof result.getReader !== "function") {
+				console.error("AIG proxy stream error: unexpected non-stream response");
+				return new Response("Unexpected non-stream response from AI", {
+					status: 502,
+					headers: { "content-type": "application/json" },
+				});
+			}
+
+			// Pipe OpenAI SSE → Anthropic SSE via TransformStream
+			const transformed = (result as ReadableStream).pipeThrough(openAIStreamToAnthropicStream(ROUTE));
+
+			return new Response(transformed, {
+				status: 200,
+				headers: {
+					"content-type": "text/event-stream",
+					"cache-control": "no-cache",
+					connection: "keep-alive",
+				},
 			});
 		}
 
-		// Pipe OpenAI SSE → Anthropic SSE via TransformStream
-		const transformed = resp.body.pipeThrough(openAIStreamToAnthropicStream(ROUTE));
+		// ---- Non-streaming path ----
+		if (!result?.choices?.length) {
+			console.error("AIG proxy error: no choices in response", JSON.stringify(result));
+			return Response.json(result, { status: 502 });
+		}
 
-		return new Response(transformed, {
-			status: 200,
-			headers: {
-				"content-type": "text/event-stream",
-				"cache-control": "no-cache",
-				connection: "keep-alive",
-			},
-		});
+		return Response.json(translateOpenAIToAnthropic(result, ROUTE));
+	} catch (err) {
+		console.error("AIG proxy error:", err);
+		return Response.json({ error: String(err) }, { status: 502 });
 	}
-
-	// ---- Non-streaming path ----
-	const oai: any = await resp.json();
-
-	if (!resp.ok || !oai.choices?.length) {
-		console.error(`AIG proxy error: status=${resp.status}`, JSON.stringify(oai));
-		return Response.json(oai, { status: resp.status });
-	}
-
-	return Response.json(translateOpenAIToAnthropic(oai, ROUTE));
 }
 
 // ---------------------------------------------------------------------------
@@ -621,6 +624,61 @@ app.all("/terminal/*", async (c) => {
 	headers.set("x-user-email", user);
 	const proxyReq = new Request(url.toString(), { ...c.req.raw, headers });
 	return container.fetch(proxyReq);
+});
+
+// ---- Auxiliary terminal (port 8081) ----
+// Second ttyd instance for running shell commands, dev servers, etc.
+// Uses switchPort for WebSocket support (required by ttyd).
+app.all("/aux-terminal/*", async (c) => {
+	const user = c.get("userEmail");
+	const containerId = c.env.CLAUDE_CODE_CONTAINER.idFromName(user);
+	const container = c.env.CLAUDE_CODE_CONTAINER.get(containerId);
+
+	const url = new URL(c.req.url);
+	url.pathname = url.pathname.replace("/aux-terminal", "") || "/";
+
+	const headers = new Headers(c.req.raw.headers);
+	headers.set("x-user-email", user);
+	const proxyReq = new Request(url.toString(), { ...c.req.raw, headers });
+
+	// switchPort + fetch for WebSocket support (ttyd needs it)
+	return container.fetch(switchPort(proxyReq, 8081));
+});
+
+// ---- File server API (port 8082) ----
+// Proxies to the Node file-server running inside the container.
+app.all("/files/*", async (c) => {
+	const user = c.get("userEmail");
+	const containerId = c.env.CLAUDE_CODE_CONTAINER.idFromName(user);
+	const container = c.env.CLAUDE_CODE_CONTAINER.get(containerId);
+
+	const url = new URL(c.req.url);
+	// Rewrite /files/api/files?path=... → /api/files?path=...
+	url.pathname = url.pathname.replace("/files", "") || "/";
+
+	const headers = new Headers(c.req.raw.headers);
+	headers.set("x-user-email", user);
+	const proxyReq = new Request(url.toString(), { ...c.req.raw, headers });
+
+	return container.fetch(switchPort(proxyReq, 8082));
+});
+
+// ---- Preview proxy (port 8083) ----
+// Proxies to the preview server running inside the container.
+app.all("/preview/*", async (c) => {
+	const user = c.get("userEmail");
+	const containerId = c.env.CLAUDE_CODE_CONTAINER.idFromName(user);
+	const container = c.env.CLAUDE_CODE_CONTAINER.get(containerId);
+
+	const url = new URL(c.req.url);
+	url.pathname = url.pathname.replace("/preview", "") || "/";
+
+	const headers = new Headers(c.req.raw.headers);
+	headers.set("x-user-email", user);
+	const proxyReq = new Request(url.toString(), { ...c.req.raw, headers });
+
+	// switchPort + fetch for WebSocket support (HMR dev servers use WebSockets)
+	return container.fetch(switchPort(proxyReq, 8083));
 });
 
 // ---- Container management API (JSON) ----
