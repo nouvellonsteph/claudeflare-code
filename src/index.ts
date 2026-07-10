@@ -7,8 +7,9 @@
 // Two subsystems:
 //
 // 1. AIG PROXY — translates Anthropic Messages API ↔ OpenAI Chat Completions
-//    and forwards to Cloudflare AI Gateway's /compat endpoint. Handles auth,
+//    and forwards to AI Gateway's /compat endpoint via fetch(). Handles auth,
 //    metadata injection, max_tokens clamping, and response format translation.
+//    The complexity classifier uses env.AI.run() for @cf/ Workers AI models.
 //    Routes: POST /v1/messages, GET /v1/models, GET /health
 //
 // 2. CONTAINER TERMINAL — per-user web terminals running Claude Code CLI in
@@ -165,8 +166,9 @@ async function verifyAccessJwt(request: Request, aud: string, certsUrl: string):
 // Constants
 // ---------------------------------------------------------------------------
 
-// AI Gateway dynamic route — set this to match your AI Gateway configuration.
-// Format: "dynamic/<gateway-id>" routes through AI Gateway's model router.
+// AI Gateway dynamic route — resolved by AI Gateway's model router.
+// Used as the `model` field in /compat/chat/completions requests.
+// The complexity classifier uses env.AI.run() with @cf/ models directly.
 const ROUTE = `dynamic/${globalEnv.GATEWAY_ID}`;
 
 // ---------------------------------------------------------------------------
@@ -459,8 +461,17 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 	const messages = translateAnthropicToOpenAI(body);
 
 	// ---- Call AI Gateway /compat ----
+	// NOTE: The main proxy uses fetch() to AI Gateway's /compat endpoint
+	// (not env.AI.run) because it needs:
+	//   1. Dynamic routing — "dynamic/<gateway-id>" is resolved at the
+	//      compat URL level; env.AI.run() only accepts @cf/ or author/model.
+	//   2. BYOK auth — cf-aig-authorization header with the account's own
+	//      API token; env.AI.run() uses Unified Billing which is incompatible.
+	// The complexity classifier (above) uses env.AI.run() because it targets
+	// a specific @cf/ Workers AI model where the binding works natively.
+	//
 	// Claude Code requests max_tokens=64000+ for Claude models, but the
-	// backing Workers AI model has a much smaller context window.
+	// backing model may have a smaller context window.
 	// Clamp to a safe ceiling so the request doesn't get rejected.
 	const maxTokens = clampMaxTokens(body.max_tokens);
 	const wantsStream = body.stream === true;
