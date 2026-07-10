@@ -11,6 +11,7 @@ import {
 	parseComplexity,
 	hashToUnitInterval,
 	shouldClassifyComplexity,
+	isNewSession,
 	createStreamTransformer,
 	openAIStreamToAnthropicStream,
 	MAX_TOKENS_CEILING,
@@ -383,6 +384,58 @@ describe("resolveMetadata", () => {
 	it("accessUser overrides user from x-metadata", () => {
 		const m = resolveMetadata(undefined, "real@cf.com", JSON.stringify({ user: "fake@bad.com" }));
 		expect(m.user).toBe("real@cf.com");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Session detection
+// ---------------------------------------------------------------------------
+
+describe("isNewSession", () => {
+	it("returns true for a single user message (first turn)", () => {
+		const body = { messages: [{ role: "user", content: "Build a REST API" }] };
+		expect(isNewSession(body)).toBe(true);
+	});
+
+	it("returns true for a single user message with content blocks", () => {
+		const body = {
+			messages: [{ role: "user", content: [{ type: "text", text: "Hello" }] }],
+		};
+		expect(isNewSession(body)).toBe(true);
+	});
+
+	it("returns false when assistant messages are present (continuation)", () => {
+		const body = {
+			messages: [
+				{ role: "user", content: "Build a REST API" },
+				{ role: "assistant", content: "Sure, let me help." },
+				{ role: "user", content: "Use Express" },
+			],
+		};
+		expect(isNewSession(body)).toBe(false);
+	});
+
+	it("returns false for empty messages", () => {
+		expect(isNewSession({ messages: [] })).toBe(false);
+		expect(isNewSession({})).toBe(false);
+	});
+
+	it("returns false when multiple user messages exist without assistant", () => {
+		const body = {
+			messages: [
+				{ role: "user", content: "First message" },
+				{ role: "user", content: "Second message" },
+			],
+		};
+		expect(isNewSession(body)).toBe(false);
+	});
+
+	it("returns true with system prompt and single user message", () => {
+		const body = {
+			system: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Hello" }],
+		};
+		expect(isNewSession(body)).toBe(true);
 	});
 });
 
