@@ -43,6 +43,7 @@ import {
 	extractTaskText,
 	parseComplexity,
 	shouldClassifyComplexity,
+	isNewSession,
 	MAX_TOKENS_CEILING,
 	COMPLEXITY_MODEL,
 	COMPLEXITY_SYSTEM_PROMPT,
@@ -234,21 +235,47 @@ export class ClaudeCodeContainer extends Container<Env> {
 		return (await this.ctx.storage.get<string>("userEmail")) || "unknown";
 	}
 
-	// RPC methods for async complexity classification.
-	// The outbound handler classifies on turn 1 (fire-and-forget) and stores
-	// the result here. On turn 2+, the proxy reads the stored complexity to
-	// tag metadata and potentially route to a different model.
+	// RPC methods for session-scoped complexity classification.
+	// Each Claude Code conversation gets its own session ID and independent
+	// complexity classification. The outbound handler detects new sessions
+	// (first user message with no assistant messages), generates a session ID,
+	// and classifies complexity. On subsequent turns of the same session,
+	// the stored complexity is read from session-scoped storage.
+	//
+	// Storage layout:
+	//   "sessionId"                     → current session UUID
+	//   "complexity:<sessionId>"        → complexity for that session
+
+	async getSessionId(): Promise<string | null> {
+		return (await this.ctx.storage.get<string>("sessionId")) ?? null;
+	}
+
+	async setSessionId(sessionId: string): Promise<void> {
+		await this.ctx.storage.put("sessionId", sessionId);
+		console.log(`[container] New session started: ${sessionId}`);
+	}
+
 	async getSessionComplexity(): Promise<string | null> {
-		return (await this.ctx.storage.get<string>("complexity")) ?? null;
+		const sessionId = await this.ctx.storage.get<string>("sessionId");
+		if (!sessionId) return null;
+		return (await this.ctx.storage.get<string>(`complexity:${sessionId}`)) ?? null;
 	}
 
 	async setSessionComplexity(complexity: string): Promise<void> {
-		await this.ctx.storage.put("complexity", complexity);
-		console.log(`[container] Stored complexity: ${complexity}`);
+		const sessionId = await this.ctx.storage.get<string>("sessionId");
+		if (!sessionId) {
+			console.warn("[container] setSessionComplexity called with no active session");
+			return;
+		}
+		await this.ctx.storage.put(`complexity:${sessionId}`, complexity);
+		console.log(`[container] Stored complexity: ${complexity} (session: ${sessionId})`);
 	}
 
 	async clearSessionComplexity(): Promise<void> {
-		await this.ctx.storage.delete("complexity");
+		const sessionId = await this.ctx.storage.get<string>("sessionId");
+		if (sessionId) {
+			await this.ctx.storage.delete(`complexity:${sessionId}`);
+		}
 	}
 
 	override onStart() {
@@ -270,30 +297,37 @@ export class ClaudeCodeContainer extends Container<Env> {
 // is not available here. To get the user email and session complexity, we
 // call back into the DO via env.CLAUDE_CODE_CONTAINER stub using RPC.
 //
-// ASYNC COMPLEXITY CLASSIFICATION:
-// Turn 1: no stored complexity yet → forward immediately with default model,
-//         fire-and-forget classification via ctx.waitUntil().
-// Turn 2+: read stored complexity from DO → tag metadata + route accordingly.
+// SESSION-SCOPED COMPLEXITY CLASSIFICATION:
+// Each Claude Code conversation gets its own session ID and independent
+// complexity classification. A new session is detected when the request
+// contains a single user message with no assistant messages (first turn).
+//
+// New session detected:
+//   1. Generate a new session UUID and store it in the DO
+//   2. Fire-and-forget classification via ctx.waitUntil()
+//   3. Forward immediately with no complexity (pending)
+//
+// Existing session (turn 2+):
+//   Read stored complexity for the current session → tag metadata.
 ClaudeCodeContainer.outboundByHost = {
 	"anthropic.proxy": async (request: Request, env: Env, ctx: any) => {
 		let user = "unknown";
 		let complexity: string | null = null;
+		let sessionId: string | null = null;
 		let stub: any;
 		try {
 			const id = env.CLAUDE_CODE_CONTAINER.idFromString(ctx.containerId);
 			stub = env.CLAUDE_CODE_CONTAINER.get(id);
-			[user, complexity] = await Promise.all([
+			[user, sessionId] = await Promise.all([
 				stub.getUserEmail(),
-				stub.getSessionComplexity(),
+				stub.getSessionId(),
 			]);
 		} catch (err) {
 			console.error("[outbound] Failed to get session state:", err);
 		}
 
-		console.log(`[outbound] ${request.method} ${request.url} (user: ${user}, complexity: ${complexity ?? "pending"})`);
-
 		// Clone the request body for both the proxy call and the async classifier.
-		// We need the body twice: once for handleProxy, once for extractTaskText.
+		// We need the body twice: once for handleProxy, once for session detection + extractTaskText.
 		const bodyText = await request.text();
 		const proxyRequest = new Request(request.url, {
 			method: request.method,
@@ -301,60 +335,86 @@ ClaudeCodeContainer.outboundByHost = {
 			body: bodyText,
 		});
 
-		// If no complexity yet and classification is enabled, fire-and-forget
-		// the classifier via AI Gateway (logged, cached, observable in dashboard).
-		// Uses env.AI.run() with the gateway option so the call routes through
-		// AI Gateway just like all other inference in this project.
-		if (!complexity && stub && env.AI) {
+		// Detect session boundaries and manage complexity per session.
+		let parsedBody: any = null;
+		try {
+			parsedBody = JSON.parse(bodyText);
+		} catch {
+			// Body parse failed — skip session detection, proxy will re-parse
+		}
+
+		const newSession = parsedBody ? isNewSession(parsedBody) : false;
+
+		if (newSession && stub) {
+			// New conversation detected — generate a fresh session ID and
+			// reset complexity. The old session's complexity stays in storage
+			// (keyed by its session ID) for potential historical queries.
+			sessionId = crypto.randomUUID();
 			try {
-				const body = JSON.parse(bodyText);
-				const taskText = extractTaskText(body);
-				if (taskText && shouldClassifyComplexity(true, 1, user)) {
-					// Fire-and-forget: classify async, don't block the proxy response
-					ctx.waitUntil(
-						(async () => {
-							try {
-								const result: any = await env.AI.run(
-									COMPLEXITY_MODEL,
-									{
-										messages: [
-											{ role: "system", content: COMPLEXITY_SYSTEM_PROMPT },
-											{ role: "user", content: taskText.slice(0, 4000) },
-										],
-										max_tokens: 5,
-										temperature: 0,
-									},
-									{
-										gateway: {
-											id: env.GATEWAY_ID,
-											skipCache: false,
-											cacheTtl: 300,
-											metadata: {
-												source: "claude-code",
-												user,
-												task: "complexity-classification",
-												model: COMPLEXITY_MODEL,
-											},
-										},
-									},
-								);
-								const parsed = parseComplexity(String(result?.response ?? ""));
-								if (parsed) {
-									await stub.setSessionComplexity(parsed);
-									console.log(`[complexity] Classified task as: ${parsed}`);
-								}
-							} catch (err) {
-								console.error("[complexity] Async classification failed:", err);
-							}
-						})(),
-					);
-				}
-			} catch {
-				// Body parse failed — skip classification, proxy will re-parse
+				await stub.setSessionId(sessionId);
+			} catch (err) {
+				console.error("[outbound] Failed to set new session ID:", err);
+			}
+			complexity = null; // Force reclassification
+		} else if (sessionId && stub) {
+			// Existing session — read the stored complexity for this session
+			try {
+				complexity = await stub.getSessionComplexity();
+			} catch (err) {
+				console.error("[outbound] Failed to get session complexity:", err);
 			}
 		}
 
-		return handleProxy(proxyRequest, env, { skipAuth: true, user, complexity: complexity as Complexity | null });
+		console.log(`[outbound] ${request.method} ${request.url} (user: ${user}, session: ${sessionId ?? "none"}, complexity: ${complexity ?? "pending"})`);
+
+		// If no complexity yet for this session and classification is enabled,
+		// fire-and-forget the classifier via AI Gateway.
+		if (!complexity && stub && env.AI && parsedBody) {
+			const taskText = extractTaskText(parsedBody);
+			if (taskText && shouldClassifyComplexity(true, 1, user)) {
+				// Fire-and-forget: classify async, don't block the proxy response
+				ctx.waitUntil(
+					(async () => {
+						try {
+							const result: any = await env.AI.run(
+								COMPLEXITY_MODEL,
+								{
+									messages: [
+										{ role: "system", content: COMPLEXITY_SYSTEM_PROMPT },
+										{ role: "user", content: taskText.slice(0, 4000) },
+									],
+									max_tokens: 5,
+									temperature: 0,
+								},
+								{
+									gateway: {
+										id: env.GATEWAY_ID,
+										skipCache: false,
+										cacheTtl: 300,
+										metadata: {
+											source: "claude-code",
+											user,
+											session: sessionId ?? undefined,
+											task: "complexity-classification",
+											model: COMPLEXITY_MODEL,
+										},
+									},
+								},
+							);
+							const parsed = parseComplexity(String(result?.response ?? ""));
+							if (parsed) {
+								await stub.setSessionComplexity(parsed);
+								console.log(`[complexity] Classified task as: ${parsed} (session: ${sessionId})`);
+							}
+						} catch (err) {
+							console.error("[complexity] Async classification failed:", err);
+						}
+					})(),
+				);
+			}
+		}
+
+		return handleProxy(proxyRequest, env, { skipAuth: true, user, sessionId, complexity: complexity as Complexity | null });
 	},
 };
 
@@ -368,7 +428,7 @@ ClaudeCodeContainer.outbound = async (request: Request, env: Env, ctx: any) => {
 // AIG proxy logic — all inference via env.AI.run() (Workers AI binding)
 // ---------------------------------------------------------------------------
 
-async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boolean; user?: string; complexity?: Complexity | null }): Promise<Response> {
+async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boolean; user?: string; sessionId?: string | null; complexity?: Complexity | null }): Promise<Response> {
 	const { pathname } = new URL(request.url);
 
 	// Health — no auth
@@ -452,7 +512,10 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 	// ---- Metadata ----
 	const metadata = resolveMetadata(opts, accessUser, request.headers.get("x-metadata"));
 
-	// Tag with session complexity if available (set async on turn 1, read on turn 2+)
+	// Tag with session ID and complexity if available
+	if (opts?.sessionId) {
+		metadata.session = opts.sessionId;
+	}
 	if (opts?.complexity) {
 		metadata.complexity = opts.complexity;
 	}

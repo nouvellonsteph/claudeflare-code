@@ -242,6 +242,32 @@ export function clampMaxTokens(maxTokens: number | undefined | null): number | u
 }
 
 // ---------------------------------------------------------------------------
+// Session detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Detects whether an Anthropic request represents the start of a new
+ * conversation (session). A new session is identified when the message
+ * array contains only a single user message with no prior assistant
+ * messages — this is the first turn of a fresh Claude Code conversation.
+ *
+ * Claude Code sends the full conversation history in every request, so
+ * the presence of assistant messages indicates a continuation of an
+ * existing session.
+ */
+export function isNewSession(body: AnthropicRequestBody): boolean {
+	const messages = body.messages || [];
+	if (messages.length === 0) return false;
+
+	const hasAssistant = messages.some((m) => m.role === "assistant");
+	if (hasAssistant) return false;
+
+	// Only user messages (possibly with system) and exactly one user message
+	// with actual text content = first turn of a new session.
+	const userMessages = messages.filter((m) => m.role === "user");
+	return userMessages.length === 1;
+}
+
 // Task complexity classification
 // ---------------------------------------------------------------------------
 
