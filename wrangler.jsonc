@@ -17,7 +17,11 @@
 		// Cloudflare Access audience tag (from Zero Trust > Access > Applications)
 		"CF_ACCESS_AUD": "",
 		// Cloudflare Access JWKs URL
-		"CF_ACCESS_CERTS_URL": ""
+		"CF_ACCESS_CERTS_URL": "",
+		// Complexity classification toggle — set to false to disable for everyone.
+		"COMPLEXITY_CLASSIFICATION_ENABLED": true,
+		// Classification rollout sample rate (0 = never, 1 = always).
+		"COMPLEXITY_CLASSIFICATION_SAMPLE_RATE": 1
 	},
 
 	"containers": [
@@ -28,6 +32,11 @@
 			"max_instances": 20
 		}
 	],
+	// Workers AI binding — used to run a small, fast model that classifies
+	// task complexity (low/medium/high) for AI Gateway custom metadata.
+	"ai": {
+		"binding": "AI"
+	},
 	"durable_objects": {
 		"bindings": [
 			{

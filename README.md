@@ -21,6 +21,7 @@ Browser (Cloudflare Access)
 - **Isolated terminals**: Each authenticated user gets their own container running `ttyd` + Claude Code CLI, keyed by their email address.
 - **API proxy**: All Claude Code API calls are intercepted at the container boundary via `outboundByHost`, translated from Anthropic format to OpenAI format, and forwarded through AI Gateway.
 - **Observability**: Every request is tagged with user identity metadata in AI Gateway, giving you per-user usage visibility.
+- **Complexity tagging**: Each request is classified as `low`/`medium`/`high` complexity by a small, fast Workers AI model and tagged as AI Gateway custom metadata — transparent to the user, useful for cost/usage analysis.
 - **Caching**: Identical prompts are cached at the AI Gateway edge for 5 minutes, reducing latency and cost.
 - **Cost control**: `max_tokens` is clamped to a configurable ceiling (default 8192) regardless of what Claude Code requests.
 
@@ -32,6 +33,7 @@ Browser (Cloudflare Access)
 | [Containers](https://developers.cloudflare.com/containers/) | Per-user isolated Claude Code terminals |
 | [Durable Objects](https://developers.cloudflare.com/durable-objects/) | Container lifecycle, user state (SQLite) |
 | [AI Gateway](https://developers.cloudflare.com/ai-gateway/) | Model routing, logging, caching, rate limiting |
+| [Workers AI](https://developers.cloudflare.com/workers-ai/) | Fast task-complexity classification for AI Gateway metadata |
 | [Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) | Zero Trust authentication (JWT) |
 
 ## Prerequisites
@@ -126,10 +128,11 @@ claudeflare-code/
 Claude Code CLI inside the container sends Anthropic Messages API requests to `http://anthropic.proxy` (configured via `ANTHROPIC_BASE_URL`). The container's outbound traffic is intercepted by `outboundByHost` and routed through the AIG proxy, which:
 
 1. Extracts user identity via DO RPC (`getUserEmail()`)
-2. Translates Anthropic format to OpenAI Chat Completions format
-3. Clamps `max_tokens` to `MAX_TOKENS_CEILING` (8192)
-4. Forwards to AI Gateway with auth, metadata, and cache headers
-5. Translates the OpenAI response back to Anthropic format
+2. Classifies the task's complexity (`low`/`medium`/`high`) with a small Workers AI model, for AI Gateway metadata only — never altering the request
+3. Translates Anthropic format to OpenAI Chat Completions format
+4. Clamps `max_tokens` to `MAX_TOKENS_CEILING` (8192)
+5. Forwards to AI Gateway with auth, metadata (including complexity), and cache headers
+6. Translates the OpenAI response back to Anthropic format
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full technical breakdown.
 
@@ -149,6 +152,8 @@ In `src/index.ts`:
 
 - `MAX_TOKENS_CEILING`: Maximum tokens per response (8192)
 - Cache TTL: AI Gateway cache duration (300s / 5 minutes via `cf-aig-cache-ttl` header)
+- `COMPLEXITY_MODEL`: Workers AI model used for complexity classification (`@cf/meta/llama-3.2-1b-instruct` by default)
+- `COMPLEXITY_ROLLOUT`: Single on/off + sample-rate control for complexity classification — set `enabled: false` to disable for everyone, or tune `sampleRate` (0–1) to roll it out to a fraction of requests (deterministic per-user, not per-request)
 
 ## License
 

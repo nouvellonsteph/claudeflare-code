@@ -7,7 +7,7 @@ This document describes the technical architecture of Claudeflare Code.
 Claudeflare Code is a single Cloudflare Worker (`src/index.ts`) that serves two roles:
 
 1. **Container orchestrator** — manages per-user Durable Object instances that each run a Docker container with `ttyd` + Claude Code CLI.
-2. **AI Gateway proxy** — intercepts all API calls from the container, translates between Anthropic and OpenAI formats, and forwards through Cloudflare AI Gateway.
+2. **AI Gateway proxy** — intercepts all API calls from the container, translates between Anthropic and OpenAI formats, and forwards through Cloudflare AI Gateway. Each request is potentially tagged with a `complexity` (`low`/`medium`/`high`) custom metadata value, classified by a small Workers AI model.
 
 Everything runs on Cloudflare's network. There is no origin server.
 
@@ -97,13 +97,14 @@ model                       →      model
 
 ### Worker (`src/index.ts`)
 
-Single-file Worker using [Hono](https://hono.dev/) for routing. ~860 lines covering:
+Single-file Worker using [Hono](https://hono.dev/) for routing. ~985 lines covering:
 
 - **Access JWT verification** (lines 33-168): Full RS256 JWT verification with JWK caching (10 min TTL). Validates audience, expiry, and signature.
 - **ClaudeCodeContainer class** (lines 183-249): Extends `Container<Env>` from `@cloudflare/containers`. Configures the container runtime (port, sleep timeout, env vars, internet access). Provides `getUserEmail()` RPC method.
 - **Outbound handlers** (lines 258-278): `outboundByHost` intercepts `anthropic.proxy` traffic. Catch-all `outbound` passes through all other traffic.
-- **AIG proxy** (lines 284-451): `handleProxy()` function handling translation, auth, metadata, clamping, and AI Gateway forwarding.
-- **Hono routes** (lines 457-866): Landing page, terminal proxy, management API, test endpoint.
+- **Complexity classification** (lines 289-420): `COMPLEXITY_ROLLOUT`, `shouldClassifyComplexity()`, `extractTaskText()`, and `classifyComplexity()` — gates and runs the small Workers AI model that produces `complexity` metadata.
+- **AIG proxy** (lines 422-604): `handleProxy()` function handling translation, auth, metadata (incl. complexity tagging), clamping, and AI Gateway forwarding.
+- **Hono routes** (lines 608-1018): Landing page, terminal proxy, management API, test endpoint.
 
 ### Container (`Dockerfile.claude-code`)
 
@@ -143,10 +144,22 @@ Headers sent:
 | Header | Value | Purpose |
 |--------|-------|---------|
 | `cf-aig-authorization` | `Bearer <CF_AIG_TOKEN>` | Gateway authentication |
-| `cf-aig-metadata` | `{"source":"claude-code","user":"..."}` | Per-request metadata for analytics |
+| `cf-aig-metadata` | `{"source":"claude-code","user":"...","complexity":"..."}` | Per-request metadata for analytics |
 | `cf-aig-cache-ttl` | `300` | Cache identical requests for 5 minutes |
 
 The `model` field is set to `dynamic/<gateway-id>`, which tells AI Gateway to use its configured model routing (fallback chains, load balancing, etc.).
+
+### Task complexity classification
+
+Before forwarding to AI Gateway, `handleProxy()` extracts the original task text (the first `user` message containing actual text, skipping tool-result-only messages) and classifies it as `low`, `medium`, or `high` complexity using a small, fast Workers AI model (`@cf/meta/llama-3.2-1b-instruct`, via the `env.AI` binding). The result is added to `cf-aig-metadata` as `complexity`.
+
+This is purely an observability signal:
+
+- It never changes the request or response Claude Code sees — the classification call and the main proxied request are independent, and a classification failure/timeout silently omits the `complexity` key rather than failing or altering the request.
+- Results are cached in-memory per isolate (keyed by task text) to avoid re-classifying the same task on every turn of an agentic tool-call loop, since Claude Code resends the full conversation history on each request.
+- Because custom metadata is limited to 5 keys per request, `complexity` brings the total to 3 (alongside `source` and `user`), leaving headroom for future tags.
+
+**Rollout control**: the `COMPLEXITY_ROLLOUT` constant in `src/index.ts` (just above `classifyComplexity()`) is the single place that controls this feature — `enabled: false` turns it off for everyone, and `sampleRate` (0–1) rolls it out to a fraction of requests. Sampling is gated by `shouldClassifyComplexity()`, which hashes the resolved `user` identifier (FNV-1a) into `[0, 1)` so a given user consistently lands on the same side of the threshold across an agentic task's multiple requests, rather than being included on one turn and excluded on the next. There is currently no per-user or per-JWT-claim targeting — it's a global code-level toggle, by design, for simplicity.
 
 ## Security model
 
