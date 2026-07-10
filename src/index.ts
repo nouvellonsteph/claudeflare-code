@@ -528,8 +528,16 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 	// ---- Translate Anthropic → OpenAI ----
 	const messages = translateAnthropicToOpenAI(body);
 
-	// ---- Call via Workers AI binding (env.AI.run) ----
-	// Routes through AI Gateway for logging, caching, and dynamic routing.
+	// ---- Call AI Gateway /compat ----
+	// The main proxy uses fetch() to AI Gateway's /compat endpoint (not
+	// env.AI.run) because it needs:
+	//   1. Dynamic routing — "dynamic/<gateway-id>" is resolved at the
+	//      compat URL level; env.AI.run() only accepts @cf/ or author/model.
+	//   2. BYOK auth — cf-aig-authorization header with the account's own
+	//      API token; env.AI.run() uses Unified Billing instead.
+	// The complexity classifier (above) uses env.AI.run() because it targets
+	// a specific @cf/ Workers AI model where the binding works natively.
+	//
 	// Claude Code requests max_tokens=64000+ for Claude models, but the
 	// backing model may have a smaller context window.
 	// Clamp to a safe ceiling so the request doesn't get rejected.
@@ -554,63 +562,63 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 		? { tool_choice: body.tool_choice === "auto" ? "auto" : body.tool_choice === "any" ? "required" : body.tool_choice }
 		: {};
 
-	// Gateway options: metadata, caching, and routing via the AI binding.
-	const gatewayOpts = {
-		gateway: {
-			id: env.GATEWAY_ID,
-			skipCache: false,
-			cacheTtl: 300,
-			metadata,
+	const resp = await fetch(
+		`https://gateway.ai.cloudflare.com/v1/${env.CLOUDFLARE_ACCOUNT_ID}/${env.GATEWAY_ID}/compat/chat/completions`,
+		{
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"cf-aig-authorization": `Bearer ${env.CF_AIG_TOKEN}`,
+				"cf-aig-metadata": JSON.stringify(metadata),
+				// Cache identical requests for 5 minutes (300s) at AI Gateway.
+				// Serves repeated prompts from edge cache, saving latency + cost.
+				"cf-aig-cache-ttl": "300",
+			},
+			body: JSON.stringify({
+				model: ROUTE,
+				messages,
+				stream: wantsStream,
+				...(maxTokens != null ? { max_tokens: maxTokens } : {}),
+				...(body.temperature != null ? { temperature: body.temperature } : {}),
+				...toolsPayload,
+				...toolChoicePayload,
+			}),
 		},
-	};
+	);
 
-	const aiInput = {
-		messages,
-		stream: wantsStream,
-		...(maxTokens != null ? { max_tokens: maxTokens } : {}),
-		...(body.temperature != null ? { temperature: body.temperature } : {}),
-		...toolsPayload,
-		...toolChoicePayload,
-	};
-
-	try {
-		const result: any = await env.AI.run(ROUTE as any, aiInput, gatewayOpts);
-
-		// ---- Streaming path ----
-		if (wantsStream) {
-			// env.AI.run with stream:true returns a ReadableStream of SSE chunks
-			if (!result || typeof result.getReader !== "function") {
-				console.error("AIG proxy stream error: unexpected non-stream response");
-				return new Response("Unexpected non-stream response from AI", {
-					status: 502,
-					headers: { "content-type": "application/json" },
-				});
-			}
-
-			// Pipe OpenAI SSE → Anthropic SSE via TransformStream
-			const transformed = (result as ReadableStream).pipeThrough(openAIStreamToAnthropicStream(ROUTE));
-
-			return new Response(transformed, {
-				status: 200,
-				headers: {
-					"content-type": "text/event-stream",
-					"cache-control": "no-cache",
-					connection: "keep-alive",
-				},
+	// ---- Streaming path ----
+	if (wantsStream) {
+		if (!resp.ok || !resp.body) {
+			const errBody = await resp.text();
+			console.error(`AIG proxy stream error: status=${resp.status}`, errBody);
+			return new Response(errBody, {
+				status: resp.status,
+				headers: { "content-type": "application/json" },
 			});
 		}
 
-		// ---- Non-streaming path ----
-		if (!result?.choices?.length) {
-			console.error("AIG proxy error: no choices in response", JSON.stringify(result));
-			return Response.json(result, { status: 502 });
-		}
+		// Pipe OpenAI SSE → Anthropic SSE via TransformStream
+		const transformed = resp.body.pipeThrough(openAIStreamToAnthropicStream(ROUTE));
 
-		return Response.json(translateOpenAIToAnthropic(result, ROUTE));
-	} catch (err) {
-		console.error("AIG proxy error:", err);
-		return Response.json({ error: String(err) }, { status: 502 });
+		return new Response(transformed, {
+			status: 200,
+			headers: {
+				"content-type": "text/event-stream",
+				"cache-control": "no-cache",
+				connection: "keep-alive",
+			},
+		});
 	}
+
+	// ---- Non-streaming path ----
+	const oai: any = await resp.json();
+
+	if (!resp.ok || !oai.choices?.length) {
+		console.error(`AIG proxy error: status=${resp.status}`, JSON.stringify(oai));
+		return Response.json(oai, { status: resp.status });
+	}
+
+	return Response.json(translateOpenAIToAnthropic(oai, ROUTE));
 }
 
 // ---------------------------------------------------------------------------
