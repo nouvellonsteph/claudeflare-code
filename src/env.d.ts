@@ -5,9 +5,12 @@
 interface __BaseEnv_Env {
 	// Secrets (set via `wrangler secret put`)
 	GATEWAY_ID: string;
-	CLOUDFLARE_ACCOUNT_ID: string;
-	AIG_PROXY_URL: string;
 	CF_ACCESS_AUD: string;
 	CF_ACCESS_CERTS_URL: string;
+	// Legacy — no longer needed now that all inference uses env.AI.run()
+	// with gateway options (binding handles auth automatically). Kept for
+	// backward compatibility; safe to remove once confirmed unused.
+	CLOUDFLARE_ACCOUNT_ID: string;
+	AIG_PROXY_URL: string;
 	CF_AIG_TOKEN: string;
 }

@@ -32,8 +32,9 @@
 			"max_instances": 20
 		}
 	],
-	// Workers AI binding — used for async task-complexity classification
-	// via AI Gateway (env.AI.run with gateway.id option).
+	// Workers AI binding — all inference routes through env.AI.run() with
+	// gateway options: main LLM proxy (dynamic route) + task-complexity
+	// classification (@cf/meta/llama-3.2-1b-instruct).
 	"ai": {
 		"binding": "AI"
 	},
