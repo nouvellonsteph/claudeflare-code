@@ -6,113 +6,379 @@
   <title>Claudeflare Code</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='5' y='23' font-family='monospace' font-size='20' font-weight='bold' fill='%23f6821f'>%3E_</text></svg>">
   <style>
+    /* ═══════════════════════════════════════════════════════════════════════
+       CSS — Claudeflare Code IDE
+       ═══════════════════════════════════════════════════════════════════════ */
+    :root {
+      --bg-0: #0d1117;       /* deepest background */
+      --bg-1: #161b22;       /* panels */
+      --bg-2: #21262d;       /* interactive surfaces */
+      --bg-3: #30363d;       /* borders */
+      --fg-0: #c9d1d9;       /* primary text */
+      --fg-1: #8b949e;       /* secondary text */
+      --fg-2: #6e7681;       /* muted text */
+      --fg-3: #484f58;       /* disabled */
+      --accent: #f6821f;     /* Cloudflare orange */
+      --accent-dim: #f6821f40;
+      --blue: #58a6ff;
+      --green: #3fb950;
+      --red: #f85149;
+      --yellow: #d29922;
+      --font-mono: "SF Mono", "Fira Code", "Cascadia Code", "JetBrains Mono", monospace;
+      --status-h: 28px;
+      --sidebar-w: 260px;
+      --preview-w: 0px;      /* toggled dynamically */
+      --aux-h: 0px;          /* toggled dynamically */
+      --tab-h: 32px;
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace; background: #0d1117; color: #c9d1d9; overflow: hidden; height: 100vh; }
+    body { font-family: var(--font-mono); background: var(--bg-0); color: var(--fg-0); overflow: hidden; height: 100vh; }
 
-    /* ── Terminal iframe (full viewport) ── */
-    #terminal-frame { width: 100%; height: 100%; border: none; }
+    /* ── IDE layout ─────────────────────────────────────────────────────── */
+    #ide {
+      display: grid;
+      width: 100vw;
+      height: calc(100vh - var(--status-h));
+      grid-template-columns: var(--sidebar-w) 1fr var(--preview-w);
+      grid-template-rows: 1fr var(--aux-h);
+      grid-template-areas:
+        "sidebar  main   preview"
+        "sidebar  aux    preview";
+      transition: grid-template-columns 0.2s, grid-template-rows 0.2s;
+    }
+    #ide.sidebar-hidden { --sidebar-w: 0px; }
+    #ide.preview-visible { --preview-w: 420px; }
+    #ide.aux-visible { --aux-h: 260px; }
 
-    /* ── Status bar ── */
+    /* ── Sidebar (file explorer) ─────────────────────────────────────── */
+    #sidebar {
+      grid-area: sidebar;
+      background: var(--bg-1);
+      border-right: 1px solid var(--bg-3);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+      min-width: 0;
+    }
+    #ide.sidebar-hidden #sidebar { display: none; }
+
+    .sidebar-header {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 12px; border-bottom: 1px solid var(--bg-3);
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+      color: var(--fg-1); font-weight: 600; flex-shrink: 0;
+    }
+    .sidebar-header .title { flex: 1; }
+    .sidebar-header button {
+      background: none; border: none; color: var(--fg-2); cursor: pointer;
+      font-size: 14px; padding: 2px 4px; border-radius: 3px; line-height: 1;
+    }
+    .sidebar-header button:hover { background: var(--bg-2); color: var(--fg-0); }
+
+    .breadcrumb {
+      padding: 4px 12px; font-size: 11px; color: var(--fg-2);
+      border-bottom: 1px solid var(--bg-3); display: flex;
+      align-items: center; gap: 4px; flex-shrink: 0; overflow: hidden;
+      white-space: nowrap;
+    }
+    .breadcrumb span { cursor: pointer; color: var(--blue); }
+    .breadcrumb span:hover { text-decoration: underline; }
+
+    #file-tree {
+      flex: 1; overflow-y: auto; overflow-x: hidden;
+      font-size: 13px;
+    }
+    #file-tree::-webkit-scrollbar { width: 6px; }
+    #file-tree::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 3px; }
+
+    .file-entry {
+      display: flex; align-items: center; gap: 6px;
+      padding: 3px 12px; cursor: pointer; user-select: none;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .file-entry:hover { background: var(--bg-2); }
+    .file-entry .icon { width: 16px; text-align: center; flex-shrink: 0; font-size: 12px; }
+    .file-entry .name { overflow: hidden; text-overflow: ellipsis; }
+    .file-entry.dir .icon { color: var(--accent); }
+    .file-entry.file .icon { color: var(--fg-2); }
+    .file-entry .size { margin-left: auto; font-size: 11px; color: var(--fg-3); flex-shrink: 0; }
+
+    /* ── Main terminal area ──────────────────────────────────────────── */
+    #main-area {
+      grid-area: main;
+      display: flex; flex-direction: column;
+      min-width: 0; min-height: 0;
+    }
+
+    .tab-bar {
+      display: flex; align-items: center;
+      height: var(--tab-h); background: var(--bg-1);
+      border-bottom: 1px solid var(--bg-3);
+      padding: 0 8px; gap: 2px; flex-shrink: 0;
+    }
+    .tab {
+      padding: 4px 12px; font-size: 12px; color: var(--fg-1);
+      border-radius: 4px 4px 0 0; cursor: pointer;
+      background: transparent; border: none; font-family: var(--font-mono);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .tab:hover { background: var(--bg-2); color: var(--fg-0); }
+    .tab.active { background: var(--bg-0); color: var(--fg-0); border-bottom: 2px solid var(--accent); }
+    .tab .dot { width: 6px; height: 6px; border-radius: 50%; }
+    .tab .dot.green { background: var(--green); }
+    .tab .dot.orange { background: var(--accent); }
+
+    .tab-actions { margin-left: auto; display: flex; gap: 4px; }
+    .tab-actions button {
+      background: none; border: none; color: var(--fg-2); cursor: pointer;
+      font-size: 13px; padding: 3px 6px; border-radius: 3px; font-family: var(--font-mono);
+    }
+    .tab-actions button:hover { background: var(--bg-2); color: var(--fg-0); }
+    .tab-actions button.active { color: var(--accent); }
+
+    #terminal-frame {
+      flex: 1; border: none; width: 100%; min-height: 0;
+      background: var(--bg-0);
+    }
+
+    /* ── Auxiliary terminal ───────────────────────────────────────────── */
+    #aux-area {
+      grid-area: aux;
+      display: none; flex-direction: column;
+      border-top: 2px solid var(--bg-3);
+      min-height: 0;
+    }
+    #ide.aux-visible #aux-area { display: flex; }
+
+    .aux-header {
+      display: flex; align-items: center;
+      height: var(--tab-h); background: var(--bg-1);
+      padding: 0 12px; font-size: 12px; color: var(--fg-1);
+      border-bottom: 1px solid var(--bg-3); flex-shrink: 0; gap: 8px;
+    }
+    .aux-header .title { flex: 1; font-weight: 600; }
+    .aux-header button {
+      background: none; border: none; color: var(--fg-2); cursor: pointer;
+      font-size: 14px; padding: 2px 6px; border-radius: 3px;
+    }
+    .aux-header button:hover { background: var(--bg-2); color: var(--fg-0); }
+
+    #aux-frame {
+      flex: 1; border: none; width: 100%; min-height: 0;
+      background: var(--bg-0);
+    }
+
+    /* ── Preview panel ───────────────────────────────────────────────── */
+    #preview-area {
+      grid-area: preview;
+      display: none; flex-direction: column;
+      border-left: 2px solid var(--bg-3);
+      min-width: 0;
+    }
+    #ide.preview-visible #preview-area { display: flex; }
+
+    .preview-header {
+      display: flex; align-items: center;
+      height: var(--tab-h); background: var(--bg-1);
+      padding: 0 8px; font-size: 12px; color: var(--fg-1);
+      border-bottom: 1px solid var(--bg-3); flex-shrink: 0; gap: 6px;
+    }
+    .preview-header .title { font-weight: 600; }
+    .preview-header .url-bar {
+      flex: 1; background: var(--bg-2); border: 1px solid var(--bg-3);
+      border-radius: 4px; padding: 2px 8px; font-size: 11px;
+      color: var(--fg-1); font-family: var(--font-mono);
+      display: flex; align-items: center; gap: 4px;
+    }
+    .preview-header .url-bar .proto { color: var(--fg-3); }
+    .preview-header .port-input {
+      width: 52px; background: var(--bg-0); border: 1px solid var(--bg-3);
+      border-radius: 3px; padding: 2px 4px; font-size: 11px;
+      color: var(--accent); font-family: var(--font-mono); text-align: center;
+    }
+    .preview-header .port-input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    .preview-header button {
+      background: none; border: none; color: var(--fg-2); cursor: pointer;
+      font-size: 14px; padding: 2px 6px; border-radius: 3px;
+    }
+    .preview-header button:hover { background: var(--bg-2); color: var(--fg-0); }
+
+    #preview-frame {
+      flex: 1; border: none; width: 100%; min-height: 0;
+      background: var(--bg-0);
+    }
+
+    /* ── Status bar ──────────────────────────────────────────────────── */
     #status-bar {
       position: fixed; bottom: 0; left: 0; right: 0;
-      height: 28px; background: #161b22; border-top: 1px solid #30363d;
+      height: var(--status-h); background: var(--bg-1);
+      border-top: 1px solid var(--bg-3);
       display: flex; align-items: center; padding: 0 12px;
-      font-size: 12px; color: #8b949e; z-index: 100; gap: 16px;
+      font-size: 11px; color: var(--fg-2); z-index: 100; gap: 12px;
     }
-    #status-bar .user { color: #58a6ff; }
-    #status-bar .state { padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
-    #status-bar .state.running { background: #23883320; color: #3fb950; }
-    #status-bar .state.stopped { background: #da363420; color: #f85149; }
-    #status-bar .state.starting { background: #d2992220; color: #d29922; }
-    #status-bar .state.unknown { background: #30363d; color: #8b949e; }
-    #status-bar .shortcuts { margin-left: auto; color: #6e7681; }
-    #status-bar kbd {
-      background: #21262d; border: 1px solid #30363d; border-radius: 3px;
-      padding: 0 4px; font-family: inherit; font-size: 11px; color: #8b949e;
+    #status-bar .user { color: var(--blue); font-weight: 500; }
+    #status-bar .state {
+      padding: 1px 8px; border-radius: 10px; font-size: 10px; font-weight: 600;
     }
+    .state.running  { background: #23883320; color: var(--green); }
+    .state.stopped  { background: #da363420; color: var(--red); }
+    .state.starting { background: #d2992220; color: var(--yellow); }
+    .state.unknown  { background: var(--bg-3); color: var(--fg-1); }
 
-    /* ── Overlay panel ── */
+    .status-sep { color: var(--bg-3); }
+    #status-bar .shortcuts { margin-left: auto; display: flex; gap: 10px; }
+    #status-bar kbd {
+      background: var(--bg-2); border: 1px solid var(--bg-3); border-radius: 3px;
+      padding: 0 4px; font-family: var(--font-mono); font-size: 10px; color: var(--fg-1);
+    }
+    .shortcut-label { color: var(--fg-3); }
+
+    /* ── Overlay panels (logs, container mgmt) ──────────────────────── */
     .overlay {
       display: none; position: fixed; top: 0; right: 0;
-      width: 480px; height: calc(100% - 28px);
-      background: #161b22; border-left: 1px solid #30363d;
-      z-index: 90; flex-direction: column;
+      width: 420px; height: calc(100% - var(--status-h));
+      background: var(--bg-1); border-left: 1px solid var(--bg-3);
+      z-index: 200; flex-direction: column;
     }
     .overlay.open { display: flex; }
     .overlay-header {
-      display: flex; align-items: center; padding: 12px 16px;
-      border-bottom: 1px solid #30363d; gap: 8px;
+      display: flex; align-items: center; padding: 10px 14px;
+      border-bottom: 1px solid var(--bg-3); gap: 8px;
     }
-    .overlay-header h2 { font-size: 14px; font-weight: 600; color: #c9d1d9; flex: 1; }
+    .overlay-header h2 { font-size: 13px; font-weight: 600; color: var(--fg-0); flex: 1; }
     .overlay-header button {
-      background: none; border: none; color: #8b949e; cursor: pointer;
-      font-size: 18px; line-height: 1; padding: 2px 6px; border-radius: 4px;
+      background: none; border: none; color: var(--fg-1); cursor: pointer;
+      font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 4px;
     }
-    .overlay-header button:hover { background: #21262d; color: #c9d1d9; }
-    .overlay-body { flex: 1; overflow-y: auto; padding: 12px 16px; }
+    .overlay-header button:hover { background: var(--bg-2); color: var(--fg-0); }
+    .overlay-body { flex: 1; overflow-y: auto; padding: 12px 14px; }
 
-    /* ── Log entries ── */
-    .log-entry { font-size: 12px; line-height: 1.8; border-bottom: 1px solid #21262d; padding: 4px 0; word-break: break-all; }
-    .log-entry .ts { color: #6e7681; margin-right: 8px; }
-    .log-entry .level-error { color: #f85149; }
-    .log-entry .level-log { color: #8b949e; }
-    .log-empty { color: #484f58; font-style: italic; padding: 24px 0; text-align: center; }
+    .log-entry { font-size: 11px; line-height: 1.8; border-bottom: 1px solid var(--bg-2); padding: 3px 0; word-break: break-all; }
+    .log-entry .ts { color: var(--fg-3); margin-right: 6px; }
+    .log-entry .level-error { color: var(--red); }
+    .log-entry .level-log { color: var(--fg-1); }
+    .log-empty { color: var(--fg-3); font-style: italic; padding: 24px 0; text-align: center; font-size: 12px; }
 
-    /* ── Management panel ── */
-    .mgmt-section { margin-bottom: 20px; }
-    .mgmt-section h3 { font-size: 13px; color: #8b949e; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
-    .mgmt-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; }
-    .mgmt-row .label { color: #8b949e; min-width: 100px; }
-    .mgmt-row .value { color: #c9d1d9; font-family: inherit; }
+    .mgmt-section { margin-bottom: 16px; }
+    .mgmt-section h3 { font-size: 11px; color: var(--fg-2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .mgmt-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+    .mgmt-row .label { color: var(--fg-2); min-width: 90px; }
+    .mgmt-row .value { color: var(--fg-0); }
     .btn-action {
-      background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
-      padding: 6px 14px; border-radius: 6px; font-size: 13px;
-      font-family: inherit; cursor: pointer; transition: all 0.15s;
+      background: var(--bg-2); border: 1px solid var(--bg-3); color: var(--fg-0);
+      padding: 5px 12px; border-radius: 5px; font-size: 12px;
+      font-family: var(--font-mono); cursor: pointer; transition: all 0.15s;
     }
-    .btn-action:hover { background: #30363d; border-color: #484f58; }
-    .btn-danger { border-color: #f8514930; color: #f85149; }
-    .btn-danger:hover { background: #f8514920; border-color: #f85149; }
+    .btn-action:hover { background: var(--bg-3); border-color: var(--fg-3); }
+    .btn-danger { border-color: #f8514930; color: var(--red); }
+    .btn-danger:hover { background: #f8514920; border-color: var(--red); }
     .btn-action:disabled { opacity: 0.5; cursor: not-allowed; }
-    .test-result { margin-top: 8px; font-size: 12px; background: #0d1117; border-radius: 6px; padding: 10px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
+    .test-result { margin-top: 8px; font-size: 11px; background: var(--bg-0); border-radius: 5px; padding: 8px; max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
+
+    /* ── Resize handles ──────────────────────────────────────────────── */
+    .resize-h {
+      position: absolute; top: 0; width: 4px; height: 100%;
+      cursor: col-resize; z-index: 50;
+    }
+    .resize-v {
+      position: absolute; left: 0; right: 0; height: 4px;
+      cursor: row-resize; z-index: 50;
+    }
   </style>
 </head>
 <body>
 
-<iframe id="terminal-frame" src="/terminal/"></iframe>
+<!-- ═══════════════════════════════════════════════════════════════════════
+     IDE Layout
+     ═══════════════════════════════════════════════════════════════════════ -->
+<div id="ide">
 
-<!-- Logs overlay (Ctrl+L) -->
+  <!-- ── Sidebar: File Explorer ── -->
+  <div id="sidebar">
+    <div class="sidebar-header">
+      <span class="title">Explorer</span>
+      <button onclick="refreshFiles()" title="Refresh">&#x21bb;</button>
+      <button onclick="navigateTo('/workspace')" title="Home">&#x2302;</button>
+    </div>
+    <div class="breadcrumb" id="breadcrumb"></div>
+    <div id="file-tree"></div>
+  </div>
+
+  <!-- ── Main terminal ── -->
+  <div id="main-area">
+    <div class="tab-bar">
+      <button class="tab active" id="tab-claude">
+        <span class="dot green"></span>
+        Claude Code
+      </button>
+      <div class="tab-actions">
+        <button onclick="toggleSidebar()" title="Toggle Explorer (Ctrl+B)" id="btn-sidebar">&#x2630;</button>
+        <button onclick="toggleAux()" title="Toggle Terminal (Ctrl+`)" id="btn-aux">&#x2a0d;</button>
+        <button onclick="togglePreview()" title="Toggle Preview (Ctrl+P)" id="btn-preview">&#x25a2;</button>
+        <span style="color:var(--bg-3);margin:0 4px">|</span>
+        <button onclick="togglePanel('logs')" title="Logs (Ctrl+L)">&#x2261;</button>
+        <button onclick="togglePanel('mgmt')" title="Container (Ctrl+K)">&#x2699;</button>
+      </div>
+    </div>
+    <iframe id="terminal-frame" src="/terminal/"></iframe>
+  </div>
+
+  <!-- ── Auxiliary terminal ── -->
+  <div id="aux-area">
+    <div class="aux-header">
+      <span class="title">&#x276f; Terminal</span>
+      <button onclick="toggleAux()" title="Close (Ctrl+`)">&#x2715;</button>
+    </div>
+    <iframe id="aux-frame" src="/aux-terminal/"></iframe>
+  </div>
+
+  <!-- ── Preview browser ── -->
+  <div id="preview-area">
+    <div class="preview-header">
+      <span class="title">Preview</span>
+      <div class="url-bar">
+        <span class="proto">localhost:</span>
+        <input type="number" class="port-input" id="preview-port" value="3000"
+               min="1" max="65535" onchange="setPreviewPort(this.value)">
+      </div>
+      <button onclick="refreshPreview()" title="Refresh">&#x21bb;</button>
+      <button onclick="togglePreview()" title="Close">&#x2715;</button>
+    </div>
+    <iframe id="preview-frame" src="/preview/"></iframe>
+  </div>
+
+</div>
+
+<!-- ── Logs overlay ── -->
 <div class="overlay" id="logs-panel">
   <div class="overlay-header">
     <h2>Proxy Logs</h2>
     <button onclick="clearLogs()" title="Clear">&#x2715;</button>
-    <button onclick="togglePanel('logs')" title="Close (Ctrl+L)">&#x2190;</button>
+    <button onclick="togglePanel('logs')" title="Close">&#x2190;</button>
   </div>
   <div class="overlay-body" id="logs-body">
     <div class="log-empty">Logs appear here as the proxy handles requests.</div>
   </div>
 </div>
 
-<!-- Container management overlay (Ctrl+K) -->
+<!-- ── Container management overlay ── -->
 <div class="overlay" id="mgmt-panel">
   <div class="overlay-header">
     <h2>Container</h2>
-    <button onclick="togglePanel('mgmt')" title="Close (Ctrl+K)">&#x2190;</button>
+    <button onclick="togglePanel('mgmt')" title="Close">&#x2190;</button>
   </div>
   <div class="overlay-body">
     <div class="mgmt-section">
       <h3>Info</h3>
       <div class="mgmt-row"><span class="label">User</span><span class="value" id="mgmt-user">--</span></div>
       <div class="mgmt-row"><span class="label">State</span><span class="value" id="mgmt-state">--</span></div>
-      <div class="mgmt-row"><span class="label">Container ID</span><span class="value" id="mgmt-id" style="font-size:11px">--</span></div>
+      <div class="mgmt-row"><span class="label">Container</span><span class="value" id="mgmt-id" style="font-size:10px">--</span></div>
     </div>
     <div class="mgmt-section">
       <h3>Actions</h3>
-      <div class="mgmt-row" style="gap:12px">
-        <button class="btn-action" onclick="doRestart()">Restart Container</button>
+      <div class="mgmt-row" style="gap:10px">
+        <button class="btn-action" onclick="doRestart()">Restart</button>
         <button class="btn-action btn-danger" onclick="doDestroy()">Destroy</button>
-      </div>
-      <div class="mgmt-row">
-        <button class="btn-action" onclick="doRefreshStatus()">Refresh Status</button>
+        <button class="btn-action" onclick="doRefreshStatus()">Refresh</button>
       </div>
     </div>
     <div class="mgmt-section">
@@ -125,21 +391,31 @@
   </div>
 </div>
 
-<!-- Status bar -->
+<!-- ── Status bar ── -->
 <div id="status-bar">
   <span class="user" id="sb-user">--</span>
   <span class="state unknown" id="sb-state">--</span>
-  <span class="shortcuts">
-    <kbd>Ctrl+L</kbd> Logs &nbsp;
-    <kbd>Ctrl+K</kbd> Container &nbsp;
-    <kbd>Ctrl+D</kbd> Destroy
-  </span>
+  <span class="status-sep">|</span>
+  <span id="sb-info" style="color:var(--fg-3)">Claudeflare Code IDE</span>
+  <div class="shortcuts">
+    <span><kbd>Ctrl+B</kbd> <span class="shortcut-label">Explorer</span></span>
+    <span><kbd>Ctrl+`</kbd> <span class="shortcut-label">Terminal</span></span>
+    <span><kbd>Ctrl+P</kbd> <span class="shortcut-label">Preview</span></span>
+    <span><kbd>Ctrl+L</kbd> <span class="shortcut-label">Logs</span></span>
+    <span><kbd>Ctrl+K</kbd> <span class="shortcut-label">Container</span></span>
+  </div>
 </div>
 
+<!-- ═══════════════════════════════════════════════════════════════════════
+     JavaScript
+     ═══════════════════════════════════════════════════════════════════════ -->
 <script>
-// ── Identity ──
+// ── State ──
 let currentUser = '--';
+let currentPath = '/workspace';
+const ide = document.getElementById('ide');
 
+// ── Identity ──
 async function loadIdentity() {
   try {
     const r = await fetch('/api/whoami');
@@ -154,11 +430,35 @@ async function loadIdentity() {
 }
 
 // ── Panel toggling ──
+function toggleSidebar() {
+  ide.classList.toggle('sidebar-hidden');
+  document.getElementById('btn-sidebar').classList.toggle('active', !ide.classList.contains('sidebar-hidden'));
+}
+
+function toggleAux() {
+  ide.classList.toggle('aux-visible');
+  document.getElementById('btn-aux').classList.toggle('active', ide.classList.contains('aux-visible'));
+  // Load aux terminal iframe lazily
+  const frame = document.getElementById('aux-frame');
+  if (ide.classList.contains('aux-visible') && !frame.src.includes('/aux-terminal/')) {
+    frame.src = '/aux-terminal/';
+  }
+}
+
+function togglePreview() {
+  ide.classList.toggle('preview-visible');
+  document.getElementById('btn-preview').classList.toggle('active', ide.classList.contains('preview-visible'));
+  // Load preview iframe lazily
+  const frame = document.getElementById('preview-frame');
+  if (ide.classList.contains('preview-visible') && !frame.src.includes('/preview/')) {
+    frame.src = '/preview/';
+  }
+}
+
 function togglePanel(name) {
   const panels = { logs: 'logs-panel', mgmt: 'mgmt-panel' };
   const el = document.getElementById(panels[name]);
   const isOpen = el.classList.contains('open');
-  // close all
   Object.values(panels).forEach(id => document.getElementById(id).classList.remove('open'));
   if (!isOpen) {
     el.classList.add('open');
@@ -168,13 +468,148 @@ function togglePanel(name) {
 
 // ── Keyboard shortcuts ──
 document.addEventListener('keydown', (e) => {
-  // Only intercept when terminal iframe is not focused, or use Ctrl+key
   if (e.ctrlKey || e.metaKey) {
-    if (e.key === 'l') { e.preventDefault(); togglePanel('logs'); }
-    if (e.key === 'k') { e.preventDefault(); togglePanel('mgmt'); }
-    if (e.key === 'd') { e.preventDefault(); doDestroy(); }
+    if (e.key === 'b' || e.key === 'B') { e.preventDefault(); toggleSidebar(); }
+    if (e.key === '`') { e.preventDefault(); toggleAux(); }
+    if (e.key === 'p' || e.key === 'P') { e.preventDefault(); togglePreview(); }
+    if (e.key === 'l' || e.key === 'L') { e.preventDefault(); togglePanel('logs'); }
+    if (e.key === 'k' || e.key === 'K') { e.preventDefault(); togglePanel('mgmt'); }
+    if (e.key === 'd' || e.key === 'D') { e.preventDefault(); doDestroy(); }
   }
 });
+
+// ── File Explorer ──
+async function navigateTo(dirPath) {
+  currentPath = dirPath;
+  await refreshFiles();
+}
+
+async function refreshFiles() {
+  const tree = document.getElementById('file-tree');
+  const bc = document.getElementById('breadcrumb');
+
+  // Breadcrumb
+  const parts = currentPath.split('/').filter(Boolean);
+  let bcHtml = '';
+  let accumulated = '';
+  for (let i = 0; i < parts.length; i++) {
+    accumulated += '/' + parts[i];
+    const p = accumulated;
+    if (i < parts.length - 1) {
+      bcHtml += `<span onclick="navigateTo('${p}')">${parts[i]}</span> / `;
+    } else {
+      bcHtml += `<span style="color:var(--fg-0)">${parts[i]}</span>`;
+    }
+  }
+  bc.innerHTML = bcHtml;
+
+  try {
+    const r = await fetch('/files/api/files?path=' + encodeURIComponent(currentPath));
+    const d = await r.json();
+
+    if (d.error) {
+      tree.innerHTML = `<div class="log-empty">${escHtml(d.error)}</div>`;
+      return;
+    }
+
+    // Parent directory entry if not at /workspace root
+    let html = '';
+    if (currentPath !== '/workspace') {
+      const parent = currentPath.split('/').slice(0, -1).join('/') || '/workspace';
+      html += `<div class="file-entry dir" onclick="navigateTo('${parent}')">
+        <span class="icon">..</span><span class="name">..</span>
+      </div>`;
+    }
+
+    for (const entry of d.entries) {
+      const icon = entry.type === 'directory' ? '&#x1F4C1;' : fileIcon(entry.name);
+      const size = entry.type === 'file' ? formatSize(entry.size) : '';
+      const cls = entry.type === 'directory' ? 'dir' : 'file';
+      const onclick = entry.type === 'directory'
+        ? `onclick="navigateTo('${entry.path}')"`
+        : `onclick="viewFile('${entry.path}')"`;
+      html += `<div class="file-entry ${cls}" ${onclick}>
+        <span class="icon">${icon}</span>
+        <span class="name">${escHtml(entry.name)}</span>
+        <span class="size">${size}</span>
+      </div>`;
+    }
+
+    tree.innerHTML = html || '<div class="log-empty">Empty directory</div>';
+  } catch (err) {
+    tree.innerHTML = `<div class="log-empty">Failed to load files: ${escHtml(err.message)}</div>`;
+  }
+}
+
+function fileIcon(name) {
+  const ext = name.split('.').pop()?.toLowerCase();
+  const icons = {
+    js: '&#x1F7E8;', ts: '&#x1F535;', jsx: '&#x1F7E8;', tsx: '&#x1F535;',
+    json: '&#x1F7E2;', md: '&#x1F4D6;', html: '&#x1F7E0;', css: '&#x1F7E3;',
+    py: '&#x1F40D;', rs: '&#x1F980;', go: '&#x1F7E6;', sh: '&#x1F4DC;',
+    toml: '&#x2699;', yaml: '&#x2699;', yml: '&#x2699;',
+    png: '&#x1F5BC;', jpg: '&#x1F5BC;', svg: '&#x1F5BC;', gif: '&#x1F5BC;',
+    lock: '&#x1F512;',
+  };
+  return icons[ext] || '&#x1F4C4;';
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + 'B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'K';
+  return (bytes / (1024 * 1024)).toFixed(1) + 'M';
+}
+
+async function viewFile(filePath) {
+  // For now, log the file view. A full code viewer could be added later.
+  addLog('log', 'View: ' + filePath);
+  try {
+    const r = await fetch('/files/api/files/read?path=' + encodeURIComponent(filePath));
+    const d = await r.json();
+    if (d.error) {
+      addLog('error', d.error);
+      return;
+    }
+    // Open in a simple viewer overlay (reuse logs panel temporarily)
+    const body = document.getElementById('logs-body');
+    body.innerHTML = `<div style="font-size:11px;color:var(--fg-2);margin-bottom:8px">${escHtml(filePath)} (${formatSize(d.size)})</div>
+      <pre style="font-size:12px;line-height:1.6;color:var(--fg-0);white-space:pre-wrap;word-break:break-all;background:var(--bg-0);padding:10px;border-radius:6px;max-height:calc(100vh - 140px);overflow:auto">${escHtml(d.content)}</pre>`;
+    document.getElementById('logs-panel').classList.add('open');
+    document.getElementById('mgmt-panel').classList.remove('open');
+  } catch (err) {
+    addLog('error', 'Read error: ' + err.message);
+  }
+}
+
+// ── Preview ──
+async function setPreviewPort(port) {
+  const p = parseInt(port, 10);
+  if (isNaN(p) || p < 1 || p > 65535) return;
+  try {
+    await fetch('/preview/api/preview/port', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port: p }),
+    });
+    refreshPreview();
+  } catch (err) {
+    addLog('error', 'Failed to set preview port: ' + err.message);
+  }
+}
+
+function refreshPreview() {
+  const frame = document.getElementById('preview-frame');
+  frame.src = '/preview/?' + Date.now();
+}
+
+// Load current preview port on start
+async function loadPreviewPort() {
+  try {
+    const r = await fetch('/preview/api/preview/port');
+    const d = await r.json();
+    if (d.port) document.getElementById('preview-port').value = d.port;
+  } catch {}
+}
 
 // ── Logs ──
 const logEntries = [];
@@ -187,8 +622,9 @@ function addLog(level, msg) {
 function clearLogs() { logEntries.length = 0; renderLogs(); }
 function renderLogs() {
   const body = document.getElementById('logs-body');
+  // Only re-render if logs panel is showing actual logs (not file viewer)
   if (logEntries.length === 0) {
-    body.innerHTML = '<div class="log-empty">No logs yet. Interact with Claude Code to generate proxy logs.</div>';
+    body.innerHTML = '<div class="log-empty">No logs yet.</div>';
     return;
   }
   body.innerHTML = logEntries.map(e =>
@@ -196,7 +632,6 @@ function renderLogs() {
   ).join('');
   body.scrollTop = body.scrollHeight;
 }
-function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 // ── Status polling ──
 async function doRefreshStatus() {
@@ -206,10 +641,8 @@ async function doRefreshStatus() {
     updateState(d.state || 'unknown');
     document.getElementById('mgmt-state').textContent = d.state || 'unknown';
     document.getElementById('mgmt-id').textContent = d.containerId || '--';
-    addLog('log', 'Status: ' + JSON.stringify(d));
   } catch (err) {
     updateState('unknown');
-    addLog('error', 'Status error: ' + err.message);
   }
 }
 
@@ -228,7 +661,6 @@ async function doDestroy() {
     const d = await r.json();
     addLog('log', 'Destroyed: ' + d.message);
     updateState('stopped');
-    document.getElementById('mgmt-state').textContent = 'stopped';
   } catch (err) { addLog('error', 'Destroy error: ' + err.message); }
 }
 
@@ -241,7 +673,8 @@ async function doRestart() {
     updateState('starting');
     setTimeout(() => {
       document.getElementById('terminal-frame').src = '/terminal/';
-      addLog('log', 'Terminal reloaded');
+      document.getElementById('aux-frame').src = '/aux-terminal/';
+      addLog('log', 'Terminals reloaded');
     }, 3000);
   } catch (err) { addLog('error', 'Restart error: ' + err.message); }
 }
@@ -249,22 +682,27 @@ async function doRestart() {
 async function doTestProxy() {
   const el = document.getElementById('test-result');
   el.innerHTML = '<div class="test-result">Testing AIG proxy...</div>';
-  addLog('log', 'Testing AIG proxy...');
   try {
     const r = await fetch('/api/test-proxy');
     const d = await r.json();
     el.innerHTML = '<div class="test-result">' + escHtml(JSON.stringify(d, null, 2)) + '</div>';
-    addLog(d.status === 200 ? 'log' : 'error', 'Proxy test: status=' + d.status);
   } catch (err) {
-    el.innerHTML = '<div class="test-result" style="color:#f85149">' + escHtml(err.message) + '</div>';
-    addLog('error', 'Proxy test error: ' + err.message);
+    el.innerHTML = '<div class="test-result" style="color:var(--red)">' + escHtml(err.message) + '</div>';
   }
 }
+
+// ── Utilities ──
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 // ── Init ──
 loadIdentity();
 doRefreshStatus();
+refreshFiles();
+loadPreviewPort();
 setInterval(doRefreshStatus, 30000);
+
+// Sidebar visible by default, aux and preview hidden
+document.getElementById('btn-sidebar').classList.add('active');
 </script>
 
 </body>
