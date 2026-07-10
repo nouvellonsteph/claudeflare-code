@@ -225,7 +225,12 @@ export class ClaudeCodeContainer extends Container<Env> {
 			});
 		}
 
-		return this.containerFetch(request);
+		// Respect the port set by switchPort() (cf-container-target-port header).
+		// The base Container.fetch() reads this automatically, but since we
+		// override fetch() we need to handle it ourselves.
+		const targetPortHeader = request.headers.get("cf-container-target-port");
+		const targetPort = targetPortHeader ? parseInt(targetPortHeader, 10) : undefined;
+		return this.containerFetch(request, targetPort || this.defaultPort);
 	}
 
 	// RPC method: called by the outbound handler (which runs in the
