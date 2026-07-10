@@ -18,18 +18,11 @@
 		"run_worker_first": ["/api/*", "/v1/*", "/terminal/*", "/health", "/favicon.ico", "/destroy"]
 	},
 
-	"vars": {
-		// Your AI Gateway ID (slug from AI Gateway dashboard)
-		"GATEWAY_ID": "",
-		// Your Cloudflare account ID
-		"CLOUDFLARE_ACCOUNT_ID": "",
-		// The public URL of this worker (update after first deploy)
-		"AIG_PROXY_URL": "",
-		// Cloudflare Access audience tag (from Zero Trust > Access > Applications)
-		"CF_ACCESS_AUD": "",
-		// Cloudflare Access JWKs URL
-		"CF_ACCESS_CERTS_URL": ""
-	},
+	// All environment variables are set as secrets (wrangler secret put <NAME>)
+	// so they persist across deploys and don't appear in source control.
+	// See .dev.vars.example for the full list:
+	//   GATEWAY_ID, CLOUDFLARE_ACCOUNT_ID, AIG_PROXY_URL,
+	//   CF_ACCESS_AUD, CF_ACCESS_CERTS_URL, CF_AIG_TOKEN
 
 	"containers": [
 		{

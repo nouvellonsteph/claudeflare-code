@@ -1,2 +1,20 @@
+# Copy to .dev.vars and fill in your values.
+# For production, set each as a secret: wrangler secret put <NAME>
+
+# AI Gateway slug (from dashboard)
+GATEWAY_ID=your-gateway-id
+
+# Cloudflare account ID (dashboard sidebar)
+CLOUDFLARE_ACCOUNT_ID=your-account-id
+
+# Public URL of this worker (update after first deploy)
+AIG_PROXY_URL=https://claudeflare-code.your-subdomain.workers.dev
+
+# Cloudflare Access audience tag (Zero Trust > Access > Applications)
+CF_ACCESS_AUD=your-access-audience-tag
+
+# Cloudflare Access JWKs URL
+CF_ACCESS_CERTS_URL=https://your-team.cloudflareaccess.com/cdn-cgi/access/certs
+
 # AI Gateway authentication token (needs "Run" permission on your gateway)
 CF_AIG_TOKEN=your-ai-gateway-token
