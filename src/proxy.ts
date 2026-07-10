@@ -42,9 +42,21 @@ export function decodeJwtHeader(token: string): { kid?: string; alg?: string } {
 // Anthropic <-> OpenAI format translation
 // ---------------------------------------------------------------------------
 
+export interface AnthropicContentBlock {
+	type?: string;
+	text?: string;
+	// tool_use fields
+	id?: string;
+	name?: string;
+	input?: Record<string, unknown>;
+	// tool_result fields
+	tool_use_id?: string;
+	content?: string | Array<{ type?: string; text?: string }>;
+}
+
 export interface AnthropicMessage {
 	role: string;
-	content: string | Array<{ type?: string; text?: string }>;
+	content: string | AnthropicContentBlock[];
 }
 
 export interface AnthropicRequestBody {
@@ -53,6 +65,8 @@ export interface AnthropicRequestBody {
 	max_tokens?: number;
 	temperature?: number;
 	model?: string;
+	tools?: Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>;
+	tool_choice?: string | Record<string, unknown>;
 }
 
 export interface OpenAIMessage {
@@ -62,10 +76,11 @@ export interface OpenAIMessage {
 
 /**
  * Translates an Anthropic Messages API request body into an array of
- * OpenAI Chat Completions messages.
+ * OpenAI Chat Completions messages. Handles text, tool_use (assistant),
+ * and tool_result (user) content blocks.
  */
-export function translateAnthropicToOpenAI(body: AnthropicRequestBody): OpenAIMessage[] {
-	const messages: OpenAIMessage[] = [];
+export function translateAnthropicToOpenAI(body: AnthropicRequestBody): Record<string, unknown>[] {
+	const messages: Record<string, unknown>[] = [];
 
 	if (body.system) {
 		const text =
@@ -76,23 +91,80 @@ export function translateAnthropicToOpenAI(body: AnthropicRequestBody): OpenAIMe
 	}
 
 	for (const m of body.messages || []) {
-		messages.push({
-			role: m.role,
-			content:
-				typeof m.content === "string"
-					? m.content
-					: m.content.map((b) => b.text || "").join(""),
-		});
+		if (typeof m.content === "string") {
+			messages.push({ role: m.role, content: m.content });
+			continue;
+		}
+
+		// Array content — may contain text, tool_use, or tool_result blocks
+		const textParts: string[] = [];
+		const toolCalls: Array<{ id: string; type: string; function: { name: string; arguments: string } }> = [];
+		const toolResults: Array<{ role: string; tool_call_id: string; content: string }> = [];
+
+		for (const block of m.content) {
+			if (block.type === "text") {
+				textParts.push(block.text || "");
+			} else if (block.type === "tool_use") {
+				toolCalls.push({
+					id: block.id || "",
+					type: "function",
+					function: {
+						name: block.name || "",
+						arguments: JSON.stringify(block.input || {}),
+					},
+				});
+			} else if (block.type === "tool_result") {
+				const resultContent = typeof block.content === "string"
+					? block.content
+					: Array.isArray(block.content)
+						? block.content.map((b: any) => b.text || "").join("")
+						: "";
+				toolResults.push({
+					role: "tool",
+					tool_call_id: block.tool_use_id || "",
+					content: resultContent,
+				});
+			}
+		}
+
+		if (m.role === "assistant" && toolCalls.length > 0) {
+			// Assistant message with tool calls
+			const msg: Record<string, unknown> = {
+				role: "assistant",
+				content: textParts.join("") || null,
+				tool_calls: toolCalls,
+			};
+			messages.push(msg);
+		} else if (toolResults.length > 0) {
+			// Tool results → individual tool role messages in OpenAI format
+			for (const tr of toolResults) {
+				messages.push(tr);
+			}
+		} else {
+			messages.push({ role: m.role, content: textParts.join("") });
+		}
 	}
 
 	return messages;
+}
+
+export interface OpenAIToolCall {
+	id?: string;
+	type?: string;
+	function?: {
+		name?: string;
+		arguments?: string;
+	};
 }
 
 export interface OpenAIResponse {
 	id?: string;
 	model?: string;
 	choices?: Array<{
-		message?: { content?: string };
+		message?: {
+			content?: string | null;
+			tool_calls?: OpenAIToolCall[];
+		};
 		finish_reason?: string;
 	}>;
 	usage?: {
@@ -103,17 +175,51 @@ export interface OpenAIResponse {
 
 /**
  * Translates an OpenAI Chat Completions response into an Anthropic
- * Messages API response body.
+ * Messages API response body. Handles both text responses and tool_calls
+ * (mapped to Anthropic tool_use content blocks).
  */
 export function translateOpenAIToAnthropic(oai: OpenAIResponse, route: string) {
 	const choice = oai.choices?.[0];
+	const content: Array<Record<string, unknown>> = [];
+
+	// Add text content if present
+	if (choice?.message?.content) {
+		content.push({ type: "text", text: choice.message.content });
+	}
+
+	// Convert OpenAI tool_calls → Anthropic tool_use blocks
+	if (choice?.message?.tool_calls?.length) {
+		for (const tc of choice.message.tool_calls) {
+			let input: Record<string, unknown> = {};
+			try {
+				input = JSON.parse(tc.function?.arguments || "{}");
+			} catch {}
+			content.push({
+				type: "tool_use",
+				id: tc.id || `toolu_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`,
+				name: tc.function?.name || "unknown",
+				input,
+			});
+		}
+	}
+
+	// Fallback: if no content at all, return empty text
+	if (content.length === 0) {
+		content.push({ type: "text", text: "" });
+	}
+
+	// Map finish_reason: "tool_calls" → "tool_use", "stop" → "end_turn"
+	let stopReason = choice?.finish_reason;
+	if (stopReason === "tool_calls") stopReason = "tool_use";
+	else if (stopReason === "stop") stopReason = "end_turn";
+
 	return {
 		id: oai.id || "msg_proxy",
 		type: "message" as const,
 		role: "assistant" as const,
 		model: oai.model || route,
-		content: [{ type: "text" as const, text: choice?.message?.content || "" }],
-		stop_reason: choice?.finish_reason === "stop" ? "end_turn" : choice?.finish_reason,
+		content,
+		stop_reason: stopReason,
 		usage: {
 			input_tokens: oai.usage?.prompt_tokens || 0,
 			output_tokens: oai.usage?.completion_tokens || 0,
@@ -133,6 +239,88 @@ export const MAX_TOKENS_CEILING = 8192;
 export function clampMaxTokens(maxTokens: number | undefined | null): number | undefined {
 	if (maxTokens == null) return undefined;
 	return Math.min(maxTokens, MAX_TOKENS_CEILING);
+}
+
+// ---------------------------------------------------------------------------
+// Task complexity classification
+// ---------------------------------------------------------------------------
+
+export type Complexity = "low" | "medium" | "high";
+
+export const COMPLEXITY_MODEL = "@cf/meta/llama-3.2-1b-instruct";
+
+export const COMPLEXITY_SYSTEM_PROMPT =
+	"You are a task-complexity classifier for a coding assistant. Read the " +
+	"user's request and classify how complex it will be to fulfill. Reply " +
+	"with exactly one word — low, medium, or high — and nothing else.\n" +
+	"- low: quick, narrow tasks (answer a question, summarize, small lookup, trivial edit)\n" +
+	"- medium: a bounded task needing several steps (a single feature, bug fix, or refactor)\n" +
+	"- high: large or open-ended engineering work spanning many systems/steps " +
+	"(e.g. end-to-end app design, architecture, infra automation, security integrations)";
+
+/**
+ * Extracts the text of the original user task from an Anthropic-format
+ * request body. Scans messages in order and returns the first `user`
+ * message that contains actual text (skipping tool_result-only messages),
+ * so the classification reflects the overall task rather than a single
+ * tool round-trip.
+ */
+export function extractTaskText(body: AnthropicRequestBody): string | null {
+	for (const m of body.messages || []) {
+		if (m.role !== "user") continue;
+		if (typeof m.content === "string") {
+			const text = m.content.trim();
+			if (text) return text;
+		} else if (Array.isArray(m.content)) {
+			const text = m.content
+				.filter((b) => b?.type === "text" && typeof b.text === "string")
+				.map((b) => b.text || "")
+				.join("\n")
+				.trim();
+			if (text) return text;
+		}
+	}
+	return null;
+}
+
+/**
+ * Parses a raw model response string into a Complexity value.
+ * Returns undefined if the response doesn't contain a valid classification.
+ */
+export function parseComplexity(raw: string): Complexity | undefined {
+	const text = raw.trim().toLowerCase();
+	if (text.includes("high")) return "high";
+	if (text.includes("medium")) return "medium";
+	if (text.includes("low")) return "low";
+	return undefined;
+}
+
+/**
+ * Deterministic 32-bit FNV-1a hash, normalized to [0, 1).
+ * Used to bucket a user into the rollout sample so the same user
+ * consistently lands on the same side of the threshold across an
+ * agentic task's multiple requests.
+ */
+export function hashToUnitInterval(input: string): number {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < input.length; i++) {
+		hash ^= input.charCodeAt(i);
+		hash = Math.imul(hash, 0x01000193);
+	}
+	return (hash >>> 0) / 0xffffffff;
+}
+
+/**
+ * Gate for the complexity classification rollout.
+ * @param enabled - global on/off toggle
+ * @param sampleRate - 0..1 fraction of users to include
+ * @param user - user identifier for deterministic bucketing
+ */
+export function shouldClassifyComplexity(enabled: boolean, sampleRate: number, user: string): boolean {
+	if (!enabled) return false;
+	if (sampleRate >= 1) return true;
+	if (sampleRate <= 0) return false;
+	return hashToUnitInterval(user) < sampleRate;
 }
 
 // ---------------------------------------------------------------------------

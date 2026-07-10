@@ -40,8 +40,14 @@ import {
 	translateOpenAIToAnthropic,
 	clampMaxTokens,
 	resolveMetadata,
+	extractTaskText,
+	parseComplexity,
+	shouldClassifyComplexity,
 	MAX_TOKENS_CEILING,
+	COMPLEXITY_MODEL,
+	COMPLEXITY_SYSTEM_PROMPT,
 	type AccessJwtPayload,
+	type Complexity,
 } from "./proxy";
 
 // ---------------------------------------------------------------------------
@@ -225,6 +231,23 @@ export class ClaudeCodeContainer extends Container<Env> {
 		return (await this.ctx.storage.get<string>("userEmail")) || "unknown";
 	}
 
+	// RPC methods for async complexity classification.
+	// The outbound handler classifies on turn 1 (fire-and-forget) and stores
+	// the result here. On turn 2+, the proxy reads the stored complexity to
+	// tag metadata and potentially route to a different model.
+	async getSessionComplexity(): Promise<string | null> {
+		return (await this.ctx.storage.get<string>("complexity")) ?? null;
+	}
+
+	async setSessionComplexity(complexity: string): Promise<void> {
+		await this.ctx.storage.put("complexity", complexity);
+		console.log(`[container] Stored complexity: ${complexity}`);
+	}
+
+	async clearSessionComplexity(): Promise<void> {
+		await this.ctx.storage.delete("complexity");
+	}
+
 	override onStart() {
 		console.log(`Claude Code container started (id: ${this.ctx.id})`);
 	}
@@ -241,21 +264,94 @@ export class ClaudeCodeContainer extends Container<Env> {
 //
 // IMPORTANT: This handler runs in the ContainerProxy worker isolate, NOT
 // in the Durable Object. Module-level state (Maps, variables) from the DO
-// is not available here. To get the user email, we call back into the DO
-// via env.CLAUDE_CODE_CONTAINER stub using the RPC method getUserEmail().
+// is not available here. To get the user email and session complexity, we
+// call back into the DO via env.CLAUDE_CODE_CONTAINER stub using RPC.
+//
+// ASYNC COMPLEXITY CLASSIFICATION:
+// Turn 1: no stored complexity yet → forward immediately with default model,
+//         fire-and-forget classification via ctx.waitUntil().
+// Turn 2+: read stored complexity from DO → tag metadata + route accordingly.
 ClaudeCodeContainer.outboundByHost = {
 	"anthropic.proxy": async (request: Request, env: Env, ctx: any) => {
-		// Resolve the DO stub and call getUserEmail() RPC
 		let user = "unknown";
+		let complexity: string | null = null;
+		let stub: any;
 		try {
 			const id = env.CLAUDE_CODE_CONTAINER.idFromString(ctx.containerId);
-			const stub = env.CLAUDE_CODE_CONTAINER.get(id);
-			user = await stub.getUserEmail();
+			stub = env.CLAUDE_CODE_CONTAINER.get(id);
+			[user, complexity] = await Promise.all([
+				stub.getUserEmail(),
+				stub.getSessionComplexity(),
+			]);
 		} catch (err) {
-			console.error("[outbound] Failed to get user email:", err);
+			console.error("[outbound] Failed to get session state:", err);
 		}
-		console.log(`[outbound] ${request.method} ${request.url} (user: ${user})`);
-		return handleProxy(request, env, { skipAuth: true, user });
+
+		console.log(`[outbound] ${request.method} ${request.url} (user: ${user}, complexity: ${complexity ?? "pending"})`);
+
+		// Clone the request body for both the proxy call and the async classifier.
+		// We need the body twice: once for handleProxy, once for extractTaskText.
+		const bodyText = await request.text();
+		const proxyRequest = new Request(request.url, {
+			method: request.method,
+			headers: request.headers,
+			body: bodyText,
+		});
+
+		// If no complexity yet and classification is enabled, fire-and-forget
+		// the classifier via AI Gateway (logged, cached, observable in dashboard).
+		// Uses env.AI.run() with the gateway option so the call routes through
+		// AI Gateway just like all other inference in this project.
+		if (!complexity && stub && env.AI) {
+			try {
+				const body = JSON.parse(bodyText);
+				const taskText = extractTaskText(body);
+				if (taskText && shouldClassifyComplexity(true, 1, user)) {
+					// Fire-and-forget: classify async, don't block the proxy response
+					ctx.waitUntil(
+						(async () => {
+							try {
+								const result: any = await env.AI.run(
+									COMPLEXITY_MODEL,
+									{
+										messages: [
+											{ role: "system", content: COMPLEXITY_SYSTEM_PROMPT },
+											{ role: "user", content: taskText.slice(0, 4000) },
+										],
+										max_tokens: 5,
+										temperature: 0,
+									},
+									{
+										gateway: {
+											id: env.GATEWAY_ID,
+											skipCache: false,
+											cacheTtl: 300,
+											metadata: {
+												source: "claude-code",
+												user,
+												task: "complexity-classification",
+												model: COMPLEXITY_MODEL,
+											},
+										},
+									},
+								);
+								const parsed = parseComplexity(String(result?.response ?? ""));
+								if (parsed) {
+									await stub.setSessionComplexity(parsed);
+									console.log(`[complexity] Classified task as: ${parsed}`);
+								}
+							} catch (err) {
+								console.error("[complexity] Async classification failed:", err);
+							}
+						})(),
+					);
+				}
+			} catch {
+				// Body parse failed — skip classification, proxy will re-parse
+			}
+		}
+
+		return handleProxy(proxyRequest, env, { skipAuth: true, user, complexity: complexity as Complexity | null });
 	},
 };
 
@@ -266,131 +362,10 @@ ClaudeCodeContainer.outbound = async (request: Request, env: Env, ctx: any) => {
 };
 
 // ---------------------------------------------------------------------------
-// Task complexity classification
-//
-// Runs a small, fast Workers AI model against the user's original task
-// text to classify it as low/medium/high complexity, then tags the AI
-// Gateway request with `complexity` custom metadata. This is purely an
-// observability signal — it never alters the request/response Claude Code
-// sees, so it's fully transparent to the user.
-// ---------------------------------------------------------------------------
-
-type Complexity = "low" | "medium" | "high";
-
-const COMPLEXITY_MODEL = "@cf/meta/llama-3.2-1b-instruct";
-
-const COMPLEXITY_SYSTEM_PROMPT =
-	"You are a task-complexity classifier for a coding assistant. Read the " +
-	"user's request and classify how complex it will be to fulfill. Reply " +
-	"with exactly one word — low, medium, or high — and nothing else.\n" +
-	"- low: quick, narrow tasks (answer a question, summarize, small lookup, trivial edit)\n" +
-	"- medium: a bounded task needing several steps (a single feature, bug fix, or refactor)\n" +
-	"- high: large or open-ended engineering work spanning many systems/steps " +
-	"(e.g. end-to-end app design, architecture, infra automation, security integrations)";
-
-// Cache classification results within this isolate to avoid re-classifying
-// the same task text on every request in an agentic tool-call loop (Claude
-// Code resends the full conversation history on every turn).
-const complexityCache = new Map<string, Complexity>();
-const COMPLEXITY_CACHE_MAX = 200;
-
-/**
- * Extracts the text of the original user task from an Anthropic-format
- * request body. Scans messages in order and returns the first `user`
- * message that contains actual text (skipping tool_result-only messages),
- * so the classification reflects the overall task rather than a single
- * tool round-trip.
- */
-function extractTaskText(body: any): string | null {
-	for (const m of body.messages || []) {
-		if (m.role !== "user") continue;
-		if (typeof m.content === "string") {
-			const text = m.content.trim();
-			if (text) return text;
-		} else if (Array.isArray(m.content)) {
-			const text = m.content
-				.filter((b: any) => b?.type === "text" && typeof b.text === "string")
-				.map((b: any) => b.text)
-				.join("\n")
-				.trim();
-			if (text) return text;
-		}
-	}
-	return null;
-}
-
-// Deterministic 32-bit FNV-1a hash, normalized to [0, 1). Used to bucket a
-// user into the rollout sample so the same user consistently lands on the
-// same side of the threshold across an agentic task's multiple requests,
-// rather than flapping in/out on a per-request coin flip.
-function hashToUnitInterval(input: string): number {
-	let hash = 0x811c9dc5;
-	for (let i = 0; i < input.length; i++) {
-		hash ^= input.charCodeAt(i);
-		hash = Math.imul(hash, 0x01000193);
-	}
-	return (hash >>> 0) / 0xffffffff;
-}
-
-/**
- * Gate for the complexity classification rollout. Controlled by
- * COMPLEXITY_CLASSIFICATION_ENABLED and COMPLEXITY_CLASSIFICATION_SAMPLE_RATE
- * in wrangler.jsonc — no code changes needed to toggle or tune.
- */
-function shouldClassifyComplexity(env: Env, user: string): boolean {
-	if (!env.COMPLEXITY_CLASSIFICATION_ENABLED) return false;
-	const rate = env.COMPLEXITY_CLASSIFICATION_SAMPLE_RATE;
-	if (rate >= 1) return true;
-	if (rate <= 0) return false;
-	return hashToUnitInterval(user) < rate;
-}
-
-/**
- * Classifies task complexity using a small/fast Workers AI model.
- * Returns undefined (rather than a guessed default) if classification
- * fails or is inconclusive, so we never tag metadata with a misleading
- * value — the complexity key is simply omitted for that request.
- */
-async function classifyComplexity(env: Env, taskText: string): Promise<Complexity | undefined> {
-	const cacheKey = taskText.slice(0, 500);
-	const cached = complexityCache.get(cacheKey);
-	if (cached) return cached;
-
-	try {
-		const result: any = await env.AI.run(COMPLEXITY_MODEL, {
-			messages: [
-				{ role: "system", content: COMPLEXITY_SYSTEM_PROMPT },
-				{ role: "user", content: taskText.slice(0, 4000) },
-			],
-			max_tokens: 5,
-			temperature: 0,
-		});
-
-		const text = String(result?.response ?? "").trim().toLowerCase();
-		let complexity: Complexity | undefined;
-		if (text.includes("high")) complexity = "high";
-		else if (text.includes("medium")) complexity = "medium";
-		else if (text.includes("low")) complexity = "low";
-
-		if (complexity) {
-			if (complexityCache.size >= COMPLEXITY_CACHE_MAX) {
-				const oldestKey = complexityCache.keys().next().value;
-				if (oldestKey !== undefined) complexityCache.delete(oldestKey);
-			}
-			complexityCache.set(cacheKey, complexity);
-		}
-		return complexity;
-	} catch (err) {
-		console.error("[complexity] classification failed:", err);
-		return undefined;
-	}
-}
-
-// ---------------------------------------------------------------------------
 // AIG proxy logic
 // ---------------------------------------------------------------------------
 
-async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boolean; user?: string }): Promise<Response> {
+async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boolean; user?: string; complexity?: Complexity | null }): Promise<Response> {
 	const { pathname } = new URL(request.url);
 
 	// Health — no auth
@@ -474,17 +449,9 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 	// ---- Metadata ----
 	const metadata = resolveMetadata(opts, accessUser, request.headers.get("x-metadata"));
 
-	// ---- Complexity classification (transparent to the user) ----
-	// Tag the request with a low/medium/high complexity signal derived from
-	// the original task text, using a small/fast Workers AI model. This is
-	// additive metadata only — it never changes the request Claude Code sees.
-	// See COMPLEXITY_ROLLOUT for the single on/off + sample-rate control.
-	if (shouldClassifyComplexity(env, metadata.user)) {
-		const taskText = extractTaskText(body);
-		if (taskText) {
-			const complexity = await classifyComplexity(env, taskText);
-			if (complexity) metadata.complexity = complexity;
-		}
+	// Tag with session complexity if available (set async on turn 1, read on turn 2+)
+	if (opts?.complexity) {
+		metadata.complexity = opts.complexity;
 	}
 
 	// ---- Translate Anthropic → OpenAI ----
@@ -514,6 +481,20 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 				stream: false,
 				...(maxTokens != null ? { max_tokens: maxTokens } : {}),
 				...(body.temperature != null ? { temperature: body.temperature } : {}),
+				// Forward tool definitions (Anthropic → OpenAI function calling format)
+				...(body.tools?.length
+					? {
+							tools: body.tools.map((t: any) => ({
+								type: "function",
+								function: {
+									name: t.name,
+									description: t.description || "",
+									parameters: t.input_schema || {},
+								},
+							})),
+						}
+					: {}),
+				...(body.tool_choice ? { tool_choice: body.tool_choice === "auto" ? "auto" : body.tool_choice === "any" ? "required" : body.tool_choice } : {}),
 			}),
 		},
 	);
