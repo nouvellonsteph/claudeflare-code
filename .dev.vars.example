@@ -1,0 +1,2 @@
+# AI Gateway authentication token (needs "Run" permission on your gateway)
+CF_AIG_TOKEN=your-ai-gateway-token

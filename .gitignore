@@ -1,7 +1,7 @@
 node_modules/
 .wrangler/
 worker-configuration.d.ts
-wrangler.jsonc
+.dev.vars
 *.log
 .DS_Store
 dist/

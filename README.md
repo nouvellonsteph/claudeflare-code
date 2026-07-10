@@ -55,13 +55,7 @@ npm install
 
 ### 2. Configure
 
-Copy the example config and fill in your values:
-
-```bash
-cp wrangler.jsonc.example wrangler.jsonc
-```
-
-Edit `wrangler.jsonc`:
+Edit `wrangler.jsonc` with your values:
 
 | Variable | Description |
 |----------|-------------|
@@ -70,6 +64,12 @@ Edit `wrangler.jsonc`:
 | `AIG_PROXY_URL` | The public URL of this worker (update after first deploy) |
 | `CF_ACCESS_AUD` | Audience tag from your Access application |
 | `CF_ACCESS_CERTS_URL` | JWKs URL from your Access team (`https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`) |
+
+Copy `.dev.vars.example` to `.dev.vars` and set your secret for local dev:
+
+```bash
+cp .dev.vars.example .dev.vars
+```
 
 ### 3. Deploy
 
@@ -105,7 +105,8 @@ claudeflare-code/
 │   ├── entrypoint.sh          # Container startup: ttyd on port 8080
 │   └── claude-settings.json   # Claude Code model configuration
 ├── Dockerfile.claude-code     # Container image: node + ttyd + claude-code CLI
-├── wrangler.jsonc.example     # Config template (copy to wrangler.jsonc)
+├── wrangler.jsonc              # Wrangler config (fill in your values)
+├── .dev.vars.example          # Secret template (copy to .dev.vars)
 ├── package.json
 ├── tsconfig.json
 ├── ARCHITECTURE.md            # Detailed technical architecture

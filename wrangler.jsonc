@@ -8,19 +8,17 @@
 	"upload_source_maps": true,
 
 	"vars": {
-		// Your AI Gateway ID (the slug from the AI Gateway dashboard)
-		"GATEWAY_ID": "your-gateway-id",
+		// Your AI Gateway ID (slug from AI Gateway dashboard)
+		"GATEWAY_ID": "",
 		// Your Cloudflare account ID
-		"CLOUDFLARE_ACCOUNT_ID": "your-account-id",
+		"CLOUDFLARE_ACCOUNT_ID": "",
 		// The public URL of this worker (update after first deploy)
-		"AIG_PROXY_URL": "https://claudeflare-code.<your-subdomain>.workers.dev",
+		"AIG_PROXY_URL": "",
 		// Cloudflare Access audience tag (from Zero Trust > Access > Applications)
-		"CF_ACCESS_AUD": "your-access-application-audience-tag",
-		// Cloudflare Access JWKs URL (from Zero Trust > Settings > Authentication)
-		"CF_ACCESS_CERTS_URL": "https://<your-team>.cloudflareaccess.com/cdn-cgi/access/certs"
+		"CF_ACCESS_AUD": "",
+		// Cloudflare Access JWKs URL
+		"CF_ACCESS_CERTS_URL": ""
 	},
-	// Secrets (set after first deploy):
-	//   wrangler secret put CF_AIG_TOKEN    <- AI Gateway auth token
 
 	"containers": [
 		{

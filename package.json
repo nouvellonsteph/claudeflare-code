@@ -13,7 +13,29 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/cloudflare/claudeflare-code"
+    "url": "https://github.com/nouvellonsteph/claudeflare-code"
+  },
+  "cloudflare": {
+    "bindings": {
+      "GATEWAY_ID": {
+        "description": "Your AI Gateway slug (from the AI Gateway dashboard, e.g. 'my-gateway')."
+      },
+      "CLOUDFLARE_ACCOUNT_ID": {
+        "description": "Your Cloudflare account ID (found in the dashboard sidebar)."
+      },
+      "AIG_PROXY_URL": {
+        "description": "The public URL of this worker. Set to https://claudeflare-code.<your-subdomain>.workers.dev after first deploy."
+      },
+      "CF_ACCESS_AUD": {
+        "description": "Cloudflare Access application audience tag (from Zero Trust > Access > Applications)."
+      },
+      "CF_ACCESS_CERTS_URL": {
+        "description": "Cloudflare Access JWKs URL: https://<your-team>.cloudflareaccess.com/cdn-cgi/access/certs"
+      },
+      "CF_AIG_TOKEN": {
+        "description": "AI Gateway authentication token with 'Run' permission on your gateway."
+      }
+    }
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7",
