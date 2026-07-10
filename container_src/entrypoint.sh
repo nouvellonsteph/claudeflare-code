@@ -23,9 +23,11 @@ cat > ~/.claude/.credentials.json <<EOF
 {"claudeAiApiKey":"$ANTHROPIC_API_KEY"}
 EOF
 
-# Start a tmux session with claude running inside it.
-# If claude exits, the user drops to a bash shell and can type `claude` again.
-tmux new-session -d -s main -x 200 -y 50 'claude; exec bash -l'
+# Start a detached tmux session. Use default size — it will resize to fit
+# the first client that attaches. set-option aggressive-resize ensures tmux
+# resizes to the smallest *attached* client (i.e. the ttyd window).
+tmux new-session -d -s main 'claude; exec bash -l'
+tmux set-option -t main aggressive-resize on
 
 # ttyd attaches to the tmux session. If the browser disconnects, the tmux
 # session keeps running. Reconnecting re-attaches to the same session.
