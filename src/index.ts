@@ -32,20 +32,21 @@
 import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
 import { env as globalEnv } from "cloudflare:workers";
 import { Hono } from "hono";
+import {
+	base64urlDecode,
+	decodeJwtPayload,
+	decodeJwtHeader,
+	translateAnthropicToOpenAI,
+	translateOpenAIToAnthropic,
+	clampMaxTokens,
+	resolveMetadata,
+	MAX_TOKENS_CEILING,
+	type AccessJwtPayload,
+} from "./proxy";
 
 // ---------------------------------------------------------------------------
 // Cloudflare Access JWT verification
 // ---------------------------------------------------------------------------
-
-interface AccessJwtPayload {
-	email?: string;
-	sub?: string;
-	aud?: string | string[];
-	iss?: string;
-	exp?: number;
-	iat?: number;
-	[key: string]: unknown;
-}
 
 interface JWK {
 	kid: string;
@@ -63,28 +64,6 @@ interface JWKSResponse {
 // Cache the imported CryptoKeys by kid to avoid re-fetching on every request
 let jwksCache: Map<string, CryptoKey> | null = null;
 let jwksCacheExpiry = 0;
-
-function base64urlDecode(s: string): Uint8Array {
-	const padded = s.replace(/-/g, "+").replace(/_/g, "/");
-	const binary = atob(padded);
-	const bytes = new Uint8Array(binary.length);
-	for (let i = 0; i < binary.length; i++) {
-		bytes[i] = binary.charCodeAt(i);
-	}
-	return bytes;
-}
-
-function decodeJwtPayload(token: string): AccessJwtPayload {
-	const parts = token.split(".");
-	if (parts.length !== 3) throw new Error("Invalid JWT format");
-	return JSON.parse(new TextDecoder().decode(base64urlDecode(parts[1])));
-}
-
-function decodeJwtHeader(token: string): { kid?: string; alg?: string } {
-	const parts = token.split(".");
-	if (parts.length !== 3) throw new Error("Invalid JWT format");
-	return JSON.parse(new TextDecoder().decode(base64urlDecode(parts[0])));
-}
 
 async function fetchJWKs(certsUrl: string): Promise<Map<string, CryptoKey>> {
 	const now = Date.now();
@@ -493,17 +472,7 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 	const body: any = await request.json();
 
 	// ---- Metadata ----
-	const metadata: Record<string, string> = { source: "claude-code", user: "unknown" };
-	try {
-		Object.assign(metadata, JSON.parse(request.headers.get("x-metadata") || "{}"));
-	} catch {}
-
-	// Determine user: Access JWT (browser) > outbound handler (container) > x-metadata
-	if (accessUser) {
-		metadata.user = accessUser;
-	} else if (opts?.user) {
-		metadata.user = opts.user;
-	}
+	const metadata = resolveMetadata(opts, accessUser, request.headers.get("x-metadata"));
 
 	// ---- Complexity classification (transparent to the user) ----
 	// Tag the request with a low/medium/high complexity signal derived from
@@ -519,34 +488,13 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 	}
 
 	// ---- Translate Anthropic → OpenAI ----
-	const messages: Array<{ role: string; content: string }> = [];
-
-	if (body.system) {
-		const text =
-			typeof body.system === "string"
-				? body.system
-				: body.system.map((b: any) => b.text || "").join("\n");
-		messages.push({ role: "system", content: text });
-	}
-
-	for (const m of body.messages || []) {
-		messages.push({
-			role: m.role,
-			content:
-				typeof m.content === "string"
-					? m.content
-					: m.content.map((b: any) => b.text || "").join(""),
-		});
-	}
+	const messages = translateAnthropicToOpenAI(body);
 
 	// ---- Call AI Gateway /compat ----
 	// Claude Code requests max_tokens=64000+ for Claude models, but the
 	// backing Workers AI model has a much smaller context window.
 	// Clamp to a safe ceiling so the request doesn't get rejected.
-	const MAX_TOKENS_CEILING = 8192;
-	const maxTokens = body.max_tokens != null
-		? Math.min(body.max_tokens, MAX_TOKENS_CEILING)
-		: undefined;
+	const maxTokens = clampMaxTokens(body.max_tokens);
 
 	const resp = await fetch(
 		`https://gateway.ai.cloudflare.com/v1/${env.CLOUDFLARE_ACCOUNT_ID}/${env.GATEWAY_ID}/compat/chat/completions`,
@@ -578,19 +526,7 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 		return Response.json(oai, { status: resp.status });
 	}
 
-	const choice = oai.choices[0];
-	return Response.json({
-		id: oai.id || "msg_proxy",
-		type: "message",
-		role: "assistant",
-		model: oai.model || ROUTE,
-		content: [{ type: "text", text: choice.message?.content || "" }],
-		stop_reason: choice.finish_reason === "stop" ? "end_turn" : choice.finish_reason,
-		usage: {
-			input_tokens: oai.usage?.prompt_tokens || 0,
-			output_tokens: oai.usage?.completion_tokens || 0,
-		},
-	});
+	return Response.json(translateOpenAIToAnthropic(oai, ROUTE));
 }
 
 // ---------------------------------------------------------------------------
@@ -647,264 +583,9 @@ app.use("/*", async (c, next) => {
 	await next();
 });
 
-// Landing page — full-screen terminal with overlay panels
-app.get("/", async (c) => {
-	const user = c.get("userEmail");
-	const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Claudeflare Code — ${user}</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='5' y='23' font-family='monospace' font-size='20' font-weight='bold' fill='%23f6821f'>%3E_</text></svg>">
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace; background: #0d1117; color: #c9d1d9; overflow: hidden; height: 100vh; }
-
-    /* ── Terminal iframe (full viewport) ── */
-    #terminal-frame { width: 100%; height: 100%; border: none; }
-
-    /* ── Status bar ── */
-    #status-bar {
-      position: fixed; bottom: 0; left: 0; right: 0;
-      height: 28px; background: #161b22; border-top: 1px solid #30363d;
-      display: flex; align-items: center; padding: 0 12px;
-      font-size: 12px; color: #8b949e; z-index: 100; gap: 16px;
-    }
-    #status-bar .user { color: #58a6ff; }
-    #status-bar .state { padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
-    #status-bar .state.running { background: #23883320; color: #3fb950; }
-    #status-bar .state.stopped { background: #da363420; color: #f85149; }
-    #status-bar .state.starting { background: #d2992220; color: #d29922; }
-    #status-bar .state.unknown { background: #30363d; color: #8b949e; }
-    #status-bar .shortcuts { margin-left: auto; color: #6e7681; }
-    #status-bar kbd {
-      background: #21262d; border: 1px solid #30363d; border-radius: 3px;
-      padding: 0 4px; font-family: inherit; font-size: 11px; color: #8b949e;
-    }
-
-    /* ── Overlay panel ── */
-    .overlay {
-      display: none; position: fixed; top: 0; right: 0;
-      width: 480px; height: calc(100% - 28px);
-      background: #161b22; border-left: 1px solid #30363d;
-      z-index: 90; flex-direction: column;
-    }
-    .overlay.open { display: flex; }
-    .overlay-header {
-      display: flex; align-items: center; padding: 12px 16px;
-      border-bottom: 1px solid #30363d; gap: 8px;
-    }
-    .overlay-header h2 { font-size: 14px; font-weight: 600; color: #c9d1d9; flex: 1; }
-    .overlay-header button {
-      background: none; border: none; color: #8b949e; cursor: pointer;
-      font-size: 18px; line-height: 1; padding: 2px 6px; border-radius: 4px;
-    }
-    .overlay-header button:hover { background: #21262d; color: #c9d1d9; }
-    .overlay-body { flex: 1; overflow-y: auto; padding: 12px 16px; }
-
-    /* ── Log entries ── */
-    .log-entry { font-size: 12px; line-height: 1.8; border-bottom: 1px solid #21262d; padding: 4px 0; word-break: break-all; }
-    .log-entry .ts { color: #6e7681; margin-right: 8px; }
-    .log-entry .level-error { color: #f85149; }
-    .log-entry .level-log { color: #8b949e; }
-    .log-empty { color: #484f58; font-style: italic; padding: 24px 0; text-align: center; }
-
-    /* ── Management panel ── */
-    .mgmt-section { margin-bottom: 20px; }
-    .mgmt-section h3 { font-size: 13px; color: #8b949e; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
-    .mgmt-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; }
-    .mgmt-row .label { color: #8b949e; min-width: 100px; }
-    .mgmt-row .value { color: #c9d1d9; font-family: inherit; }
-    .btn-action {
-      background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
-      padding: 6px 14px; border-radius: 6px; font-size: 13px;
-      font-family: inherit; cursor: pointer; transition: all 0.15s;
-    }
-    .btn-action:hover { background: #30363d; border-color: #484f58; }
-    .btn-danger { border-color: #f8514930; color: #f85149; }
-    .btn-danger:hover { background: #f8514920; border-color: #f85149; }
-    .btn-action:disabled { opacity: 0.5; cursor: not-allowed; }
-    .test-result { margin-top: 8px; font-size: 12px; background: #0d1117; border-radius: 6px; padding: 10px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
-  </style>
-</head>
-<body>
-
-<iframe id="terminal-frame" src="/terminal/"></iframe>
-
-<!-- Logs overlay (Ctrl+L) -->
-<div class="overlay" id="logs-panel">
-  <div class="overlay-header">
-    <h2>Proxy Logs</h2>
-    <button onclick="clearLogs()" title="Clear">&#x2715;</button>
-    <button onclick="togglePanel('logs')" title="Close (Ctrl+L)">&#x2190;</button>
-  </div>
-  <div class="overlay-body" id="logs-body">
-    <div class="log-empty">Logs appear here as the proxy handles requests.</div>
-  </div>
-</div>
-
-<!-- Container management overlay (Ctrl+K) -->
-<div class="overlay" id="mgmt-panel">
-  <div class="overlay-header">
-    <h2>Container</h2>
-    <button onclick="togglePanel('mgmt')" title="Close (Ctrl+K)">&#x2190;</button>
-  </div>
-  <div class="overlay-body">
-    <div class="mgmt-section">
-      <h3>Info</h3>
-      <div class="mgmt-row"><span class="label">User</span><span class="value">${user}</span></div>
-      <div class="mgmt-row"><span class="label">State</span><span class="value" id="mgmt-state">--</span></div>
-      <div class="mgmt-row"><span class="label">Container ID</span><span class="value" id="mgmt-id" style="font-size:11px">--</span></div>
-    </div>
-    <div class="mgmt-section">
-      <h3>Actions</h3>
-      <div class="mgmt-row" style="gap:12px">
-        <button class="btn-action" onclick="doRestart()">Restart Container</button>
-        <button class="btn-action btn-danger" onclick="doDestroy()">Destroy</button>
-      </div>
-      <div class="mgmt-row">
-        <button class="btn-action" onclick="doRefreshStatus()">Refresh Status</button>
-      </div>
-    </div>
-    <div class="mgmt-section">
-      <h3>Debug</h3>
-      <div class="mgmt-row">
-        <button class="btn-action" onclick="doTestProxy()">Test AIG Proxy</button>
-      </div>
-      <div id="test-result"></div>
-    </div>
-  </div>
-</div>
-
-<!-- Status bar -->
-<div id="status-bar">
-  <span class="user">${user}</span>
-  <span class="state unknown" id="sb-state">--</span>
-  <span class="shortcuts">
-    <kbd>Ctrl+L</kbd> Logs &nbsp;
-    <kbd>Ctrl+K</kbd> Container &nbsp;
-    <kbd>Ctrl+D</kbd> Destroy
-  </span>
-</div>
-
-<script>
-// ── Panel toggling ──
-function togglePanel(name) {
-  const panels = { logs: 'logs-panel', mgmt: 'mgmt-panel' };
-  const el = document.getElementById(panels[name]);
-  const isOpen = el.classList.contains('open');
-  // close all
-  Object.values(panels).forEach(id => document.getElementById(id).classList.remove('open'));
-  if (!isOpen) {
-    el.classList.add('open');
-    if (name === 'mgmt') doRefreshStatus();
-  }
-}
-
-// ── Keyboard shortcuts ──
-document.addEventListener('keydown', (e) => {
-  // Only intercept when terminal iframe is not focused, or use Ctrl+key
-  if (e.ctrlKey || e.metaKey) {
-    if (e.key === 'l') { e.preventDefault(); togglePanel('logs'); }
-    if (e.key === 'k') { e.preventDefault(); togglePanel('mgmt'); }
-    if (e.key === 'd') { e.preventDefault(); doDestroy(); }
-  }
-});
-
-// ── Logs ──
-const logEntries = [];
-function addLog(level, msg) {
-  const ts = new Date().toLocaleTimeString();
-  logEntries.push({ ts, level, msg });
-  if (logEntries.length > 200) logEntries.shift();
-  renderLogs();
-}
-function clearLogs() { logEntries.length = 0; renderLogs(); }
-function renderLogs() {
-  const body = document.getElementById('logs-body');
-  if (logEntries.length === 0) {
-    body.innerHTML = '<div class="log-empty">No logs yet. Interact with Claude Code to generate proxy logs.</div>';
-    return;
-  }
-  body.innerHTML = logEntries.map(e =>
-    '<div class="log-entry"><span class="ts">' + e.ts + '</span><span class="level-' + e.level + '">' + escHtml(e.msg) + '</span></div>'
-  ).join('');
-  body.scrollTop = body.scrollHeight;
-}
-function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-
-// ── Status polling ──
-async function doRefreshStatus() {
-  try {
-    const r = await fetch('/api/status');
-    const d = await r.json();
-    updateState(d.state || 'unknown');
-    document.getElementById('mgmt-state').textContent = d.state || 'unknown';
-    document.getElementById('mgmt-id').textContent = d.containerId || '--';
-    addLog('log', 'Status: ' + JSON.stringify(d));
-  } catch (err) {
-    updateState('unknown');
-    addLog('error', 'Status error: ' + err.message);
-  }
-}
-
-function updateState(s) {
-  const el = document.getElementById('sb-state');
-  el.textContent = s;
-  el.className = 'state ' + (s === 'running' ? 'running' : s === 'stopped' ? 'stopped' : s === 'starting' ? 'starting' : 'unknown');
-}
-
-// ── Actions ──
-async function doDestroy() {
-  if (!confirm('Destroy your container? You will need to relaunch.')) return;
-  addLog('log', 'Destroying container...');
-  try {
-    const r = await fetch('/api/destroy', { method: 'POST' });
-    const d = await r.json();
-    addLog('log', 'Destroyed: ' + d.message);
-    updateState('stopped');
-    document.getElementById('mgmt-state').textContent = 'stopped';
-  } catch (err) { addLog('error', 'Destroy error: ' + err.message); }
-}
-
-async function doRestart() {
-  addLog('log', 'Restarting container...');
-  try {
-    const r = await fetch('/api/restart', { method: 'POST' });
-    const d = await r.json();
-    addLog('log', 'Restart: ' + d.message);
-    updateState('starting');
-    setTimeout(() => {
-      document.getElementById('terminal-frame').src = '/terminal/';
-      addLog('log', 'Terminal reloaded');
-    }, 3000);
-  } catch (err) { addLog('error', 'Restart error: ' + err.message); }
-}
-
-async function doTestProxy() {
-  const el = document.getElementById('test-result');
-  el.innerHTML = '<div class="test-result">Testing AIG proxy...</div>';
-  addLog('log', 'Testing AIG proxy...');
-  try {
-    const r = await fetch('/api/test-proxy');
-    const d = await r.json();
-    el.innerHTML = '<div class="test-result">' + escHtml(JSON.stringify(d, null, 2)) + '</div>';
-    addLog(d.status === 200 ? 'log' : 'error', 'Proxy test: status=' + d.status);
-  } catch (err) {
-    el.innerHTML = '<div class="test-result" style="color:#f85149">' + escHtml(err.message) + '</div>';
-    addLog('error', 'Proxy test error: ' + err.message);
-  }
-}
-
-// Initial status check
-doRefreshStatus();
-setInterval(doRefreshStatus, 30000);
-</script>
-
-</body>
-</html>`;
-	return c.html(html);
+// GET /api/whoami — returns the authenticated user's email (used by static index.html)
+app.get("/api/whoami", async (c) => {
+	return Response.json({ email: c.get("userEmail") });
 });
 
 // Per-user container terminal — all /terminal/* requests proxy

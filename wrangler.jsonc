@@ -4,7 +4,10 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2026-07-09",
 	"compatibility_flags": ["nodejs_compat"],
-	"observability": { "enabled": true },
+	"observability": {
+		"enabled": true,
+		"traces": { "enabled": true }
+	},
 	"upload_source_maps": true,
 
 	"vars": {
@@ -22,7 +25,19 @@
 		"COMPLEXITY_CLASSIFICATION_ENABLED": true,
 		// Classification rollout sample rate (0 = never, 1 = always).
 		"COMPLEXITY_CLASSIFICATION_SAMPLE_RATE": 1
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS",
+		// Worker handles /api/*, /v1/*, /terminal/*, /health, /favicon.ico, /destroy
+		// Static assets serve / (index.html) and any other static files
+		"run_worker_first": ["/api/*", "/v1/*", "/terminal/*", "/health", "/favicon.ico", "/destroy"]
 	},
+
+	// All environment variables are set as secrets (wrangler secret put <NAME>)
+	// so they persist across deploys and don't appear in source control.
+	// See .dev.vars.example for the full list:
+	//   GATEWAY_ID, CLOUDFLARE_ACCOUNT_ID, AIG_PROXY_URL,
+	//   CF_ACCESS_AUD, CF_ACCESS_CERTS_URL, CF_AIG_TOKEN
 
 	"containers": [
 		{
