@@ -3,7 +3,7 @@
 # Entrypoint for the Claudeflare Code container (IDE mode).
 #
 # Starts four services:
-#   8080 — ttyd: Claude Code main terminal (auto-launches claude)
+#   8080 — ttyd: main terminal (plain bash, user launches claude manually)
 #   8081 — ttyd: auxiliary shell terminal (plain bash)
 #   8082 — Node file-server API (browse /workspace)
 #   8083 — Preview proxy (reverse-proxy to user dev servers)
@@ -23,11 +23,13 @@ cat > ~/.claude/.credentials.json <<EOF
 {"claudeAiApiKey":"$ANTHROPIC_API_KEY"}
 EOF
 
-# Auto-launch claude on first shell, but let the user return to bash if it exits.
+# Print a hint so users know how to launch claude manually.
 cat >> ~/.bashrc <<'BASHRC'
-if [ -z "$CLAUDE_LAUNCHED" ]; then
-  export CLAUDE_LAUNCHED=1
-  claude
+if [ -z "$CLAUDE_GREETED" ]; then
+  export CLAUDE_GREETED=1
+  echo ""
+  echo "  Type 'claude' to start Claude Code."
+  echo ""
 fi
 BASHRC
 
