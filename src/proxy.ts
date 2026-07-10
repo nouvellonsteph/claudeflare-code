@@ -136,6 +136,88 @@ export function clampMaxTokens(maxTokens: number | undefined | null): number | u
 }
 
 // ---------------------------------------------------------------------------
+// Task complexity classification
+// ---------------------------------------------------------------------------
+
+export type Complexity = "low" | "medium" | "high";
+
+export const COMPLEXITY_MODEL = "@cf/meta/llama-3.2-1b-instruct";
+
+export const COMPLEXITY_SYSTEM_PROMPT =
+	"You are a task-complexity classifier for a coding assistant. Read the " +
+	"user's request and classify how complex it will be to fulfill. Reply " +
+	"with exactly one word — low, medium, or high — and nothing else.\n" +
+	"- low: quick, narrow tasks (answer a question, summarize, small lookup, trivial edit)\n" +
+	"- medium: a bounded task needing several steps (a single feature, bug fix, or refactor)\n" +
+	"- high: large or open-ended engineering work spanning many systems/steps " +
+	"(e.g. end-to-end app design, architecture, infra automation, security integrations)";
+
+/**
+ * Extracts the text of the original user task from an Anthropic-format
+ * request body. Scans messages in order and returns the first `user`
+ * message that contains actual text (skipping tool_result-only messages),
+ * so the classification reflects the overall task rather than a single
+ * tool round-trip.
+ */
+export function extractTaskText(body: AnthropicRequestBody): string | null {
+	for (const m of body.messages || []) {
+		if (m.role !== "user") continue;
+		if (typeof m.content === "string") {
+			const text = m.content.trim();
+			if (text) return text;
+		} else if (Array.isArray(m.content)) {
+			const text = m.content
+				.filter((b) => b?.type === "text" && typeof b.text === "string")
+				.map((b) => b.text || "")
+				.join("\n")
+				.trim();
+			if (text) return text;
+		}
+	}
+	return null;
+}
+
+/**
+ * Parses a raw model response string into a Complexity value.
+ * Returns undefined if the response doesn't contain a valid classification.
+ */
+export function parseComplexity(raw: string): Complexity | undefined {
+	const text = raw.trim().toLowerCase();
+	if (text.includes("high")) return "high";
+	if (text.includes("medium")) return "medium";
+	if (text.includes("low")) return "low";
+	return undefined;
+}
+
+/**
+ * Deterministic 32-bit FNV-1a hash, normalized to [0, 1).
+ * Used to bucket a user into the rollout sample so the same user
+ * consistently lands on the same side of the threshold across an
+ * agentic task's multiple requests.
+ */
+export function hashToUnitInterval(input: string): number {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < input.length; i++) {
+		hash ^= input.charCodeAt(i);
+		hash = Math.imul(hash, 0x01000193);
+	}
+	return (hash >>> 0) / 0xffffffff;
+}
+
+/**
+ * Gate for the complexity classification rollout.
+ * @param enabled - global on/off toggle
+ * @param sampleRate - 0..1 fraction of users to include
+ * @param user - user identifier for deterministic bucketing
+ */
+export function shouldClassifyComplexity(enabled: boolean, sampleRate: number, user: string): boolean {
+	if (!enabled) return false;
+	if (sampleRate >= 1) return true;
+	if (sampleRate <= 0) return false;
+	return hashToUnitInterval(user) < sampleRate;
+}
+
+// ---------------------------------------------------------------------------
 // Metadata resolution
 // ---------------------------------------------------------------------------
 

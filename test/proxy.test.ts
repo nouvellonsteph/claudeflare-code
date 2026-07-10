@@ -7,6 +7,10 @@ import {
 	translateOpenAIToAnthropic,
 	clampMaxTokens,
 	resolveMetadata,
+	extractTaskText,
+	parseComplexity,
+	hashToUnitInterval,
+	shouldClassifyComplexity,
 	MAX_TOKENS_CEILING,
 } from "../src/proxy";
 
@@ -232,5 +236,147 @@ describe("resolveMetadata", () => {
 	it("accessUser overrides user from x-metadata", () => {
 		const m = resolveMetadata(undefined, "real@cf.com", JSON.stringify({ user: "fake@bad.com" }));
 		expect(m.user).toBe("real@cf.com");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Task complexity classification
+// ---------------------------------------------------------------------------
+
+describe("extractTaskText", () => {
+	it("extracts text from a simple string message", () => {
+		const body = { messages: [{ role: "user", content: "Build a REST API" }] };
+		expect(extractTaskText(body)).toBe("Build a REST API");
+	});
+
+	it("extracts text from content block arrays", () => {
+		const body = {
+			messages: [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "Refactor the " },
+						{ type: "text", text: "database layer" },
+					],
+				},
+			],
+		};
+		expect(extractTaskText(body)).toBe("Refactor the \ndatabase layer");
+	});
+
+	it("skips assistant messages and returns first user message", () => {
+		const body = {
+			messages: [
+				{ role: "assistant", content: "How can I help?" },
+				{ role: "user", content: "Fix the login bug" },
+				{ role: "user", content: "Also update tests" },
+			],
+		};
+		expect(extractTaskText(body)).toBe("Fix the login bug");
+	});
+
+	it("skips tool_result-only content blocks", () => {
+		const body = {
+			messages: [
+				{
+					role: "user",
+					content: [{ type: "tool_result", text: "some result" }],
+				},
+				{ role: "user", content: "The actual task" },
+			],
+		};
+		expect(extractTaskText(body)).toBe("The actual task");
+	});
+
+	it("returns null for empty messages", () => {
+		expect(extractTaskText({ messages: [] })).toBeNull();
+		expect(extractTaskText({})).toBeNull();
+	});
+
+	it("returns null when all user messages are empty strings", () => {
+		const body = {
+			messages: [
+				{ role: "user", content: "   " },
+			],
+		};
+		expect(extractTaskText(body)).toBeNull();
+	});
+});
+
+describe("parseComplexity", () => {
+	it("parses 'low'", () => {
+		expect(parseComplexity("low")).toBe("low");
+		expect(parseComplexity("Low")).toBe("low");
+		expect(parseComplexity("  LOW  ")).toBe("low");
+	});
+
+	it("parses 'medium'", () => {
+		expect(parseComplexity("medium")).toBe("medium");
+		expect(parseComplexity("Medium.")).toBe("medium");
+	});
+
+	it("parses 'high'", () => {
+		expect(parseComplexity("high")).toBe("high");
+		expect(parseComplexity("HIGH")).toBe("high");
+	});
+
+	it("returns undefined for unrecognized values", () => {
+		expect(parseComplexity("")).toBeUndefined();
+		expect(parseComplexity("moderate")).toBeUndefined();
+		expect(parseComplexity("5")).toBeUndefined();
+	});
+
+	it("extracts from verbose responses", () => {
+		expect(parseComplexity("I think this is high complexity")).toBe("high");
+		expect(parseComplexity("This task is of medium difficulty")).toBe("medium");
+	});
+});
+
+describe("hashToUnitInterval", () => {
+	it("returns a value in [0, 1)", () => {
+		const val = hashToUnitInterval("alice@example.com");
+		expect(val).toBeGreaterThanOrEqual(0);
+		expect(val).toBeLessThan(1);
+	});
+
+	it("is deterministic (same input = same output)", () => {
+		const a = hashToUnitInterval("bob@test.com");
+		const b = hashToUnitInterval("bob@test.com");
+		expect(a).toBe(b);
+	});
+
+	it("produces different values for different inputs", () => {
+		const a = hashToUnitInterval("alice@test.com");
+		const b = hashToUnitInterval("bob@test.com");
+		expect(a).not.toBe(b);
+	});
+});
+
+describe("shouldClassifyComplexity", () => {
+	it("returns false when disabled", () => {
+		expect(shouldClassifyComplexity(false, 1, "user@test.com")).toBe(false);
+	});
+
+	it("returns true when enabled with sampleRate=1", () => {
+		expect(shouldClassifyComplexity(true, 1, "user@test.com")).toBe(true);
+	});
+
+	it("returns false when sampleRate=0", () => {
+		expect(shouldClassifyComplexity(true, 0, "user@test.com")).toBe(false);
+	});
+
+	it("is deterministic per user (same user always gets same result)", () => {
+		const r1 = shouldClassifyComplexity(true, 0.5, "consistent@test.com");
+		const r2 = shouldClassifyComplexity(true, 0.5, "consistent@test.com");
+		expect(r1).toBe(r2);
+	});
+
+	it("partitions users deterministically at 50%", () => {
+		// With enough users, roughly half should be included at 50% sample rate.
+		// We test that it's not all-or-nothing.
+		const users = Array.from({ length: 100 }, (_, i) => `user${i}@test.com`);
+		const included = users.filter((u) => shouldClassifyComplexity(true, 0.5, u));
+		expect(included.length).toBeGreaterThan(20);
+		expect(included.length).toBeLessThan(80);
 	});
 });

@@ -10,8 +10,4 @@ interface __BaseEnv_Env {
 	CF_ACCESS_AUD: string;
 	CF_ACCESS_CERTS_URL: string;
 	CF_AIG_TOKEN: string;
-
-	// Complexity classification config
-	COMPLEXITY_CLASSIFICATION_ENABLED: boolean;
-	COMPLEXITY_CLASSIFICATION_SAMPLE_RATE: number;
 }

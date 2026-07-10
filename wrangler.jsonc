@@ -32,8 +32,8 @@
 			"max_instances": 20
 		}
 	],
-	// Workers AI binding — used to run a small, fast model that classifies
-	// task complexity (low/medium/high) for AI Gateway custom metadata.
+	// Workers AI binding — used for async task-complexity classification
+	// via AI Gateway (env.AI.run with gateway.id option).
 	"ai": {
 		"binding": "AI"
 	},
