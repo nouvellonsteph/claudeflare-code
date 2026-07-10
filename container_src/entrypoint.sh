@@ -2,8 +2,11 @@
 # ---------------------------------------------------------------------------
 # Entrypoint for the Claudeflare Code container.
 #
-# Pre-stores the API key in Claude Code's credentials so it doesn't show the
-# interactive "Detected a custom API key" prompt on startup.
+# Uses tmux to keep the session alive even if Claude Code exits or the
+# WebSocket disconnects. ttyd attaches to the tmux session, so:
+#   - If Claude Code exits, the user is still in a shell and can restart
+#   - If the browser disconnects/reconnects, it re-attaches to the same session
+#   - The container stays alive as long as ttyd is running (not tied to claude)
 #
 # Env vars injected by the ClaudeCodeContainer class:
 #   ANTHROPIC_API_KEY      – fake sk-ant- key (passes local validation)
@@ -20,7 +23,13 @@ cat > ~/.claude/.credentials.json <<EOF
 {"claudeAiApiKey":"$ANTHROPIC_API_KEY"}
 EOF
 
+# Start a tmux session with claude running inside it.
+# If claude exits, the user drops to a bash shell and can type `claude` again.
+tmux new-session -d -s main -x 200 -y 50 'claude; exec bash -l'
+
+# ttyd attaches to the tmux session. If the browser disconnects, the tmux
+# session keeps running. Reconnecting re-attaches to the same session.
 exec ttyd \
   --port 8080 \
   --writable \
-  claude
+  tmux attach-session -t main
