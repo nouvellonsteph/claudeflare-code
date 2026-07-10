@@ -377,7 +377,7 @@ ClaudeCodeContainer.outboundByHost = {
 					(async () => {
 						try {
 							const result: any = await env.AI.run(
-								COMPLEXITY_MODEL,
+								COMPLEXITY_MODEL as any,
 								{
 									messages: [
 										{ role: "system", content: COMPLEXITY_SYSTEM_PROMPT },
@@ -394,7 +394,7 @@ ClaudeCodeContainer.outboundByHost = {
 										metadata: {
 											source: "claude-code",
 											user,
-											session: sessionId ?? undefined,
+											...(sessionId ? { session: sessionId } : {}),
 											task: "complexity-classification",
 											model: COMPLEXITY_MODEL,
 										},
