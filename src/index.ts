@@ -48,6 +48,7 @@ import {
 	COMPLEXITY_SYSTEM_PROMPT,
 	type AccessJwtPayload,
 	type Complexity,
+	openAIStreamToAnthropicStream,
 } from "./proxy";
 
 // ---------------------------------------------------------------------------
@@ -462,6 +463,25 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 	// backing Workers AI model has a much smaller context window.
 	// Clamp to a safe ceiling so the request doesn't get rejected.
 	const maxTokens = clampMaxTokens(body.max_tokens);
+	const wantsStream = body.stream === true;
+
+	// Translate tool definitions: Anthropic format → OpenAI function calling
+	const toolsPayload = body.tools?.length
+		? {
+				tools: body.tools.map((t: any) => ({
+					type: "function",
+					function: {
+						name: t.name,
+						description: t.description || "",
+						parameters: t.input_schema || {},
+					},
+				})),
+			}
+		: {};
+
+	const toolChoicePayload = body.tool_choice
+		? { tool_choice: body.tool_choice === "auto" ? "auto" : body.tool_choice === "any" ? "required" : body.tool_choice }
+		: {};
 
 	const resp = await fetch(
 		`https://gateway.ai.cloudflare.com/v1/${env.CLOUDFLARE_ACCOUNT_ID}/${env.GATEWAY_ID}/compat/chat/completions`,
@@ -478,28 +498,40 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 			body: JSON.stringify({
 				model: ROUTE,
 				messages,
-				stream: false,
+				stream: wantsStream,
 				...(maxTokens != null ? { max_tokens: maxTokens } : {}),
 				...(body.temperature != null ? { temperature: body.temperature } : {}),
-				// Forward tool definitions (Anthropic → OpenAI function calling format)
-				...(body.tools?.length
-					? {
-							tools: body.tools.map((t: any) => ({
-								type: "function",
-								function: {
-									name: t.name,
-									description: t.description || "",
-									parameters: t.input_schema || {},
-								},
-							})),
-						}
-					: {}),
-				...(body.tool_choice ? { tool_choice: body.tool_choice === "auto" ? "auto" : body.tool_choice === "any" ? "required" : body.tool_choice } : {}),
+				...toolsPayload,
+				...toolChoicePayload,
 			}),
 		},
 	);
 
-	// ---- Translate OpenAI → Anthropic ----
+	// ---- Streaming path ----
+	if (wantsStream) {
+		if (!resp.ok || !resp.body) {
+			const errBody = await resp.text();
+			console.error(`AIG proxy stream error: status=${resp.status}`, errBody);
+			return new Response(errBody, {
+				status: resp.status,
+				headers: { "content-type": "application/json" },
+			});
+		}
+
+		// Pipe OpenAI SSE → Anthropic SSE via TransformStream
+		const transformed = resp.body.pipeThrough(openAIStreamToAnthropicStream(ROUTE));
+
+		return new Response(transformed, {
+			status: 200,
+			headers: {
+				"content-type": "text/event-stream",
+				"cache-control": "no-cache",
+				connection: "keep-alive",
+			},
+		});
+	}
+
+	// ---- Non-streaming path ----
 	const oai: any = await resp.json();
 
 	if (!resp.ok || !oai.choices?.length) {

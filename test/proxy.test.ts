@@ -11,6 +11,8 @@ import {
 	parseComplexity,
 	hashToUnitInterval,
 	shouldClassifyComplexity,
+	createStreamTransformer,
+	openAIStreamToAnthropicStream,
 	MAX_TOKENS_CEILING,
 } from "../src/proxy";
 
@@ -523,5 +525,143 @@ describe("shouldClassifyComplexity", () => {
 		const included = users.filter((u) => shouldClassifyComplexity(true, 0.5, u));
 		expect(included.length).toBeGreaterThan(20);
 		expect(included.length).toBeLessThan(80);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Streaming: OpenAI SSE → Anthropic SSE
+// ---------------------------------------------------------------------------
+
+describe("createStreamTransformer", () => {
+	it("emits message_start on first chunk", () => {
+		const process = createStreamTransformer("dynamic/gw", "msg_test");
+		const out = process({ model: "gpt-4", choices: [{ delta: { role: "assistant" } }] });
+		expect(out).toContain("event: message_start");
+		expect(out).toContain('"type":"message_start"');
+		expect(out).toContain('"id":"msg_test"');
+	});
+
+	it("emits text content_block_start and text_delta", () => {
+		const process = createStreamTransformer("route", "msg_1");
+		// First chunk triggers message_start
+		process({ choices: [{ delta: { role: "assistant" } }] });
+		// Text chunk
+		const out = process({ choices: [{ delta: { content: "Hello" } }] });
+		expect(out).toContain("event: content_block_start");
+		expect(out).toContain('"type":"text"');
+		expect(out).toContain("event: content_block_delta");
+		expect(out).toContain('"type":"text_delta"');
+		expect(out).toContain('"text":"Hello"');
+	});
+
+	it("streams multiple text deltas without reopening the block", () => {
+		const process = createStreamTransformer("route", "msg_1");
+		process({ choices: [{ delta: { role: "assistant" } }] });
+		const out1 = process({ choices: [{ delta: { content: "Hello" } }] });
+		const out2 = process({ choices: [{ delta: { content: " world" } }] });
+		// First delta opens the block
+		expect(out1).toContain("event: content_block_start");
+		// Second delta does NOT reopen it
+		expect(out2).not.toContain("event: content_block_start");
+		expect(out2).toContain('"text":" world"');
+	});
+
+	it("emits tool_use blocks from tool_calls delta", () => {
+		const process = createStreamTransformer("route", "msg_1");
+		process({ choices: [{ delta: { role: "assistant" } }] });
+		const out = process({
+			choices: [{
+				delta: {
+					tool_calls: [{
+						index: 0,
+						id: "call_abc",
+						function: { name: "Bash", arguments: '{"command":' },
+					}],
+				},
+			}],
+		});
+		expect(out).toContain("event: content_block_start");
+		expect(out).toContain('"type":"tool_use"');
+		expect(out).toContain('"name":"Bash"');
+		expect(out).toContain("event: content_block_delta");
+		expect(out).toContain('"type":"input_json_delta"');
+		expect(out).toContain('"partial_json":"{\\"command\\":');
+	});
+
+	it("accumulates tool call argument deltas", () => {
+		const process = createStreamTransformer("route", "msg_1");
+		process({ choices: [{ delta: { role: "assistant" } }] });
+		// First delta — opens the tool block
+		process({
+			choices: [{ delta: { tool_calls: [{ index: 0, id: "call_1", function: { name: "Read", arguments: '{"path":' } }] } }],
+		});
+		// Second delta — appends arguments
+		const out = process({
+			choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"/tmp"}' } }] } }],
+		});
+		// Should NOT open a new block
+		expect(out).not.toContain("event: content_block_start");
+		expect(out).toContain('"partial_json":"\\"/tmp\\"}"');
+	});
+
+	it("emits content_block_stop + message_delta + message_stop on finish", () => {
+		const process = createStreamTransformer("route", "msg_1");
+		process({ choices: [{ delta: { role: "assistant" } }] });
+		process({ choices: [{ delta: { content: "Hi" } }] });
+		const out = process({ choices: [{ delta: {}, finish_reason: "stop" }] });
+		expect(out).toContain("event: content_block_stop");
+		expect(out).toContain("event: message_delta");
+		expect(out).toContain('"stop_reason":"end_turn"');
+		expect(out).toContain("event: message_stop");
+	});
+
+	it("maps finish_reason tool_calls to stop_reason tool_use", () => {
+		const process = createStreamTransformer("route", "msg_1");
+		process({ choices: [{ delta: { role: "assistant" } }] });
+		process({
+			choices: [{ delta: { tool_calls: [{ index: 0, id: "call_1", function: { name: "Bash", arguments: '{}' } }] } }],
+		});
+		const out = process({ choices: [{ delta: {}, finish_reason: "tool_calls" }] });
+		expect(out).toContain('"stop_reason":"tool_use"');
+	});
+});
+
+describe("openAIStreamToAnthropicStream", () => {
+	it("transforms a complete OpenAI SSE stream to Anthropic SSE", async () => {
+		const openAISSE = [
+			'data: {"id":"cmpl-1","model":"gpt-4","choices":[{"delta":{"role":"assistant","content":""},"index":0}]}',
+			'data: {"choices":[{"delta":{"content":"Hello"},"index":0}]}',
+			'data: {"choices":[{"delta":{"content":"!"},"index":0}]}',
+			'data: {"choices":[{"delta":{},"index":0,"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}',
+			"data: [DONE]",
+		].join("\n") + "\n";
+
+		const encoder = new TextEncoder();
+		const decoder = new TextDecoder();
+		const input = new ReadableStream({
+			start(controller) {
+				controller.enqueue(encoder.encode(openAISSE));
+				controller.close();
+			},
+		});
+
+		const output = input.pipeThrough(openAIStreamToAnthropicStream("route"));
+		const reader = output.getReader();
+		let result = "";
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			result += decoder.decode(value);
+		}
+
+		expect(result).toContain("event: message_start");
+		expect(result).toContain("event: content_block_start");
+		expect(result).toContain('"type":"text_delta"');
+		expect(result).toContain('"text":"Hello"');
+		expect(result).toContain('"text":"!"');
+		expect(result).toContain("event: content_block_stop");
+		expect(result).toContain("event: message_delta");
+		expect(result).toContain('"stop_reason":"end_turn"');
+		expect(result).toContain("event: message_stop");
 	});
 });

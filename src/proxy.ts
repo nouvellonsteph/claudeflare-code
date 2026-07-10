@@ -349,3 +349,219 @@ export function resolveMetadata(
 
 	return metadata;
 }
+
+// ---------------------------------------------------------------------------
+// Streaming: OpenAI SSE → Anthropic SSE TransformStream
+// ---------------------------------------------------------------------------
+
+/** Format a single Anthropic SSE event. */
+function sseEvent(eventName: string, data: Record<string, unknown>): string {
+	return `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+/**
+ * State machine that transforms an OpenAI streaming response (SSE chunks
+ * with `choices[0].delta.*`) into Anthropic Messages streaming events.
+ *
+ * Handles:
+ * - Text content deltas → text_delta
+ * - Tool call deltas (incremental function arguments) → input_json_delta
+ * - Finish reasons → content_block_stop + message_delta + message_stop
+ *
+ * Returns a function that processes one parsed OpenAI chunk at a time and
+ * returns zero or more Anthropic SSE event strings.
+ */
+export function createStreamTransformer(route: string, messageId: string) {
+	let contentBlockIndex = 0;
+	let hasOpenTextBlock = false;
+	// Track active tool calls by their OpenAI index
+	const activeToolCalls = new Map<number, { anthropicIndex: number; id: string; name: string }>();
+	let inputTokens = 0;
+	let outputTokens = 0;
+	let started = false;
+
+	return function processChunk(chunk: any): string {
+		let out = "";
+
+		// Emit message_start on first chunk
+		if (!started) {
+			started = true;
+			out += sseEvent("message_start", {
+				type: "message_start",
+				message: {
+					id: messageId,
+					type: "message",
+					role: "assistant",
+					content: [],
+					model: chunk.model || route,
+					stop_reason: null,
+					stop_sequence: null,
+					usage: { input_tokens: 0, output_tokens: 0 },
+				},
+			});
+		}
+
+		const choice = chunk.choices?.[0];
+		if (!choice) return out;
+
+		const delta = choice.delta || {};
+
+		// --- Text content ---
+		if (delta.content != null && delta.content !== "") {
+			if (!hasOpenTextBlock) {
+				out += sseEvent("content_block_start", {
+					type: "content_block_start",
+					index: contentBlockIndex,
+					content_block: { type: "text", text: "" },
+				});
+				hasOpenTextBlock = true;
+			}
+			out += sseEvent("content_block_delta", {
+				type: "content_block_delta",
+				index: contentBlockIndex,
+				delta: { type: "text_delta", text: delta.content },
+			});
+		}
+
+		// --- Tool calls ---
+		if (delta.tool_calls) {
+			// Close text block before starting tool blocks
+			if (hasOpenTextBlock) {
+				out += sseEvent("content_block_stop", {
+					type: "content_block_stop",
+					index: contentBlockIndex,
+				});
+				contentBlockIndex++;
+				hasOpenTextBlock = false;
+			}
+
+			for (const tc of delta.tool_calls) {
+				const tcIndex = tc.index ?? 0;
+
+				if (!activeToolCalls.has(tcIndex)) {
+					// New tool call — emit content_block_start
+					const toolId = tc.id || `toolu_${Math.random().toString(36).slice(2, 14)}`;
+					const toolName = tc.function?.name || "unknown";
+					activeToolCalls.set(tcIndex, {
+						anthropicIndex: contentBlockIndex,
+						id: toolId,
+						name: toolName,
+					});
+					out += sseEvent("content_block_start", {
+						type: "content_block_start",
+						index: contentBlockIndex,
+						content_block: { type: "tool_use", id: toolId, name: toolName, input: {} },
+					});
+				}
+
+				// Emit argument deltas
+				if (tc.function?.arguments) {
+					const info = activeToolCalls.get(tcIndex)!;
+					out += sseEvent("content_block_delta", {
+						type: "content_block_delta",
+						index: info.anthropicIndex,
+						delta: { type: "input_json_delta", partial_json: tc.function.arguments },
+					});
+				}
+			}
+		}
+
+		// --- Usage ---
+		if (chunk.usage) {
+			inputTokens = chunk.usage.prompt_tokens || inputTokens;
+			outputTokens = chunk.usage.completion_tokens || outputTokens;
+		}
+
+		// --- Finish ---
+		if (choice.finish_reason) {
+			// Close any open text block
+			if (hasOpenTextBlock) {
+				out += sseEvent("content_block_stop", {
+					type: "content_block_stop",
+					index: contentBlockIndex,
+				});
+				contentBlockIndex++;
+				hasOpenTextBlock = false;
+			}
+
+			// Close any open tool call blocks
+			for (const [, info] of activeToolCalls) {
+				out += sseEvent("content_block_stop", {
+					type: "content_block_stop",
+					index: info.anthropicIndex,
+				});
+				contentBlockIndex++;
+			}
+			activeToolCalls.clear();
+
+			// Map stop reason
+			let stopReason = choice.finish_reason;
+			if (stopReason === "stop") stopReason = "end_turn";
+			else if (stopReason === "tool_calls") stopReason = "tool_use";
+
+			out += sseEvent("message_delta", {
+				type: "message_delta",
+				delta: { stop_reason: stopReason, stop_sequence: null },
+				usage: { output_tokens: outputTokens },
+			});
+			out += sseEvent("message_stop", { type: "message_stop" });
+		}
+
+		return out;
+	};
+}
+
+/**
+ * Creates a TransformStream that converts an OpenAI SSE byte stream into
+ * an Anthropic SSE byte stream. Handles line buffering, chunk parsing,
+ * and the [DONE] sentinel.
+ */
+export function openAIStreamToAnthropicStream(route: string, messageId?: string): TransformStream<Uint8Array, Uint8Array> {
+	const id = messageId || `msg_${Math.random().toString(36).slice(2, 14)}`;
+	const processChunk = createStreamTransformer(route, id);
+	const encoder = new TextEncoder();
+	const decoder = new TextDecoder();
+	let buffer = "";
+
+	return new TransformStream<Uint8Array, Uint8Array>({
+		transform(chunk, controller) {
+			buffer += decoder.decode(chunk, { stream: true });
+			const lines = buffer.split("\n");
+			// Keep the last incomplete line in the buffer
+			buffer = lines.pop() || "";
+
+			for (const line of lines) {
+				const trimmed = line.trim();
+				if (!trimmed || trimmed.startsWith(":")) continue; // skip empty/comments
+				if (trimmed === "data: [DONE]") continue; // OpenAI end sentinel
+
+				if (trimmed.startsWith("data: ")) {
+					try {
+						const parsed = JSON.parse(trimmed.slice(6));
+						const events = processChunk(parsed);
+						if (events) {
+							controller.enqueue(encoder.encode(events));
+						}
+					} catch {
+						// Skip malformed JSON lines
+					}
+				}
+			}
+		},
+		flush(controller) {
+			// Process any remaining buffer
+			if (buffer.trim()) {
+				const trimmed = buffer.trim();
+				if (trimmed.startsWith("data: ") && trimmed !== "data: [DONE]") {
+					try {
+						const parsed = JSON.parse(trimmed.slice(6));
+						const events = processChunk(parsed);
+						if (events) {
+							controller.enqueue(encoder.encode(events));
+						}
+					} catch {}
+				}
+			}
+		},
+	});
+}
