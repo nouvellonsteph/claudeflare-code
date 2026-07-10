@@ -44,7 +44,7 @@
       grid-template-areas:
         "sidebar  main   preview"
         "sidebar  aux    preview";
-      transition: grid-template-columns 0.2s, grid-template-rows 0.2s;
+      transition: grid-template-columns 0.15s ease, grid-template-rows 0.15s ease;
     }
     #ide.sidebar-hidden { --sidebar-w: 0px; }
     #ide.preview-visible { --preview-w: 420px; }
@@ -275,13 +275,32 @@
     .test-result { margin-top: 8px; font-size: 11px; background: var(--bg-0); border-radius: 5px; padding: 8px; max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
 
     /* ── Resize handles ──────────────────────────────────────────────── */
-    .resize-h {
-      position: absolute; top: 0; width: 4px; height: 100%;
-      cursor: col-resize; z-index: 50;
+    .resize-handle {
+      position: absolute; z-index: 60; flex-shrink: 0;
     }
-    .resize-v {
-      position: absolute; left: 0; right: 0; height: 4px;
-      cursor: row-resize; z-index: 50;
+    .resize-handle:hover, .resize-handle.active {
+      background: var(--accent-dim);
+    }
+    .resize-handle-h {
+      top: 0; width: 5px; height: 100%;
+      cursor: col-resize;
+    }
+    .resize-handle-v {
+      left: 0; right: 0; height: 5px;
+      cursor: row-resize;
+    }
+    #resize-sidebar {
+      right: -3px;
+    }
+    #resize-aux {
+      top: -3px;
+    }
+    #resize-preview {
+      left: -3px;
+    }
+    /* Prevent iframes from capturing mouse during drag */
+    body.resizing iframe {
+      pointer-events: none;
     }
   </style>
 </head>
@@ -293,7 +312,7 @@
 <div id="ide">
 
   <!-- ── Sidebar: File Explorer ── -->
-  <div id="sidebar">
+  <div id="sidebar" style="position:relative">
     <div class="sidebar-header">
       <span class="title">Explorer</span>
       <button onclick="refreshFiles()" title="Refresh">&#x21bb;</button>
@@ -301,6 +320,7 @@
     </div>
     <div class="breadcrumb" id="breadcrumb"></div>
     <div id="file-tree"></div>
+    <div id="resize-sidebar" class="resize-handle resize-handle-h"></div>
   </div>
 
   <!-- ── Main terminal ── -->
@@ -323,7 +343,8 @@
   </div>
 
   <!-- ── Auxiliary terminal ── -->
-  <div id="aux-area">
+  <div id="aux-area" style="position:relative">
+    <div id="resize-aux" class="resize-handle resize-handle-v"></div>
     <div class="aux-header">
       <span class="title">&#x276f; Terminal</span>
       <button onclick="toggleAux()" title="Close (Ctrl+`)">&#x2715;</button>
@@ -332,7 +353,8 @@
   </div>
 
   <!-- ── Preview browser ── -->
-  <div id="preview-area">
+  <div id="preview-area" style="position:relative">
+    <div id="resize-preview" class="resize-handle resize-handle-h"></div>
     <div class="preview-header">
       <span class="title">Preview</span>
       <div class="url-bar">
@@ -693,6 +715,80 @@ async function doTestProxy() {
 
 // ── Utilities ──
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ── Resize handles ──
+(function initResize() {
+  const MIN_SIDEBAR = 140;
+  const MAX_SIDEBAR = 500;
+  const MIN_AUX = 80;
+  const MIN_PREVIEW = 250;
+  const MAX_PREVIEW = 800;
+
+  let activeHandle = null;
+  let startX = 0, startY = 0;
+  let startSize = 0;
+
+  function onPointerDown(e) {
+    e.preventDefault();
+    activeHandle = e.currentTarget.id;
+    startX = e.clientX;
+    startY = e.clientY;
+
+    // Disable transition for smooth dragging
+    ide.style.transition = 'none';
+
+    if (activeHandle === 'resize-sidebar') {
+      startSize = parseInt(getComputedStyle(ide).getPropertyValue('--sidebar-w'));
+    } else if (activeHandle === 'resize-aux') {
+      startSize = parseInt(getComputedStyle(ide).getPropertyValue('--aux-h'));
+    } else if (activeHandle === 'resize-preview') {
+      startSize = parseInt(getComputedStyle(ide).getPropertyValue('--preview-w'));
+    }
+
+    document.body.classList.add('resizing');
+    e.currentTarget.classList.add('active');
+    document.addEventListener('pointermove', onPointerMove);
+    document.addEventListener('pointerup', onPointerUp);
+  }
+
+  function onPointerMove(e) {
+    if (!activeHandle) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+
+    if (activeHandle === 'resize-sidebar') {
+      const w = Math.max(MIN_SIDEBAR, Math.min(MAX_SIDEBAR, startSize + dx));
+      ide.style.setProperty('--sidebar-w', w + 'px');
+    } else if (activeHandle === 'resize-aux') {
+      // Dragging up increases aux height
+      const h = Math.max(MIN_AUX, Math.min(window.innerHeight * 0.6, startSize - dy));
+      ide.style.setProperty('--aux-h', h + 'px');
+    } else if (activeHandle === 'resize-preview') {
+      // Dragging left increases preview width
+      const w = Math.max(MIN_PREVIEW, Math.min(MAX_PREVIEW, startSize - dx));
+      ide.style.setProperty('--preview-w', w + 'px');
+    }
+  }
+
+  function onPointerUp() {
+    if (activeHandle) {
+      const el = document.getElementById(activeHandle);
+      if (el) el.classList.remove('active');
+    }
+    activeHandle = null;
+    document.body.classList.remove('resizing');
+    // Restore transition
+    ide.style.transition = '';
+    document.removeEventListener('pointermove', onPointerMove);
+    document.removeEventListener('pointerup', onPointerUp);
+  }
+
+  // Attach handlers
+  ['resize-sidebar', 'resize-aux', 'resize-preview'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('pointerdown', onPointerDown);
+  });
+})();
 
 // ── Init ──
 loadIdentity();
