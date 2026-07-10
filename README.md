@@ -1,5 +1,7 @@
 # Claudeflare Code
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/nouvellonsteph/claudeflare-code)
+
 Per-user [Claude Code](https://docs.anthropic.com/en/docs/claude-code) web terminals running in [Cloudflare Containers](https://developers.cloudflare.com/containers/), with all API calls routed through [AI Gateway](https://developers.cloudflare.com/ai-gateway/) for observability, caching, and cost control.
 
 Each user gets their own isolated container instance, authenticated via [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/). No shared state between users. No direct Anthropic API access from containers.
