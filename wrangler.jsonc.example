@@ -1,0 +1,47 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "claudeflare-code",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-07-09",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": { "enabled": true },
+	"upload_source_maps": true,
+
+	"vars": {
+		// Your AI Gateway ID (the slug from the AI Gateway dashboard)
+		"GATEWAY_ID": "your-gateway-id",
+		// Your Cloudflare account ID
+		"CLOUDFLARE_ACCOUNT_ID": "your-account-id",
+		// The public URL of this worker (update after first deploy)
+		"AIG_PROXY_URL": "https://claudeflare-code.<your-subdomain>.workers.dev",
+		// Cloudflare Access audience tag (from Zero Trust > Access > Applications)
+		"CF_ACCESS_AUD": "your-access-application-audience-tag",
+		// Cloudflare Access JWKs URL (from Zero Trust > Settings > Authentication)
+		"CF_ACCESS_CERTS_URL": "https://<your-team>.cloudflareaccess.com/cdn-cgi/access/certs"
+	},
+	// Secrets (set after first deploy):
+	//   wrangler secret put CF_AIG_TOKEN    <- AI Gateway auth token
+
+	"containers": [
+		{
+			"class_name": "ClaudeCodeContainer",
+			"image": "./Dockerfile.claude-code",
+			"instance_type": "standard-1",
+			"max_instances": 20
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"class_name": "ClaudeCodeContainer",
+				"name": "CLAUDE_CODE_CONTAINER"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"new_sqlite_classes": ["ClaudeCodeContainer"],
+			"tag": "v1"
+		}
+	]
+}
