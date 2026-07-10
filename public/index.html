@@ -6,37 +6,204 @@
   <title>Claudeflare Code</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='5' y='23' font-family='monospace' font-size='20' font-weight='bold' fill='%23f6821f'>%3E_</text></svg>">
   <style>
+    /* ── Reset & base ── */
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace; background: #0d1117; color: #c9d1d9; overflow: hidden; height: 100vh; }
+    body {
+      font-family: "SF Mono", "Fira Code", "Cascadia Code", "JetBrains Mono", monospace;
+      background: #0d1117; color: #c9d1d9; overflow: hidden; height: 100vh;
+      display: flex; flex-direction: column;
+    }
+    button { font-family: inherit; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #484f58; }
 
-    /* ── Terminal iframe (full viewport) ── */
-    #terminal-frame { width: 100%; height: 100%; border: none; }
+    /* ── Layout grid ── */
+    #ide-layout {
+      display: flex; flex: 1; overflow: hidden;
+    }
+
+    /* ── Activity bar (leftmost icon strip) ── */
+    #activity-bar {
+      width: 48px; background: #010409; border-right: 1px solid #21262d;
+      display: flex; flex-direction: column; align-items: center;
+      padding-top: 8px; gap: 4px; flex-shrink: 0;
+    }
+    .activity-btn {
+      width: 40px; height: 40px; background: none; border: none;
+      color: #6e7681; cursor: pointer; border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; transition: all 0.15s; position: relative;
+    }
+    .activity-btn:hover { color: #c9d1d9; background: #161b22; }
+    .activity-btn.active {
+      color: #c9d1d9;
+    }
+    .activity-btn.active::before {
+      content: ''; position: absolute; left: 0; top: 8px; bottom: 8px;
+      width: 2px; background: #c9d1d9; border-radius: 1px;
+    }
+    .activity-spacer { flex: 1; }
+
+    /* ── Sidebar (file explorer, etc.) ── */
+    #sidebar {
+      width: 0; background: #010409; border-right: 1px solid #21262d;
+      display: flex; flex-direction: column; overflow: hidden;
+      transition: width 0.2s ease;
+    }
+    #sidebar.open { width: 260px; }
+
+    .sidebar-header {
+      display: flex; align-items: center; padding: 10px 14px;
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.8px; color: #8b949e; border-bottom: 1px solid #21262d;
+    }
+    .sidebar-header span { flex: 1; }
+    .sidebar-header button {
+      background: none; border: none; color: #6e7681; cursor: pointer;
+      font-size: 14px; padding: 2px 4px; border-radius: 3px;
+    }
+    .sidebar-header button:hover { color: #c9d1d9; background: #21262d; }
+
+    #file-tree {
+      flex: 1; overflow-y: auto; padding: 4px 0; font-size: 13px;
+    }
+    .tree-item {
+      display: flex; align-items: center; padding: 3px 14px;
+      cursor: pointer; color: #c9d1d9; gap: 6px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .tree-item:hover { background: #161b22; }
+    .tree-item.active { background: #1f2937; }
+    .tree-item .icon { width: 16px; text-align: center; font-size: 12px; flex-shrink: 0; }
+    .tree-item .icon.dir { color: #54aeff; }
+    .tree-item .icon.file { color: #8b949e; }
+    .tree-item .icon.ts { color: #3178c6; }
+    .tree-item .icon.js { color: #f0db4f; }
+    .tree-item .icon.json { color: #6e7681; }
+    .tree-item .icon.md { color: #58a6ff; }
+    .tree-item .icon.py { color: #3572A5; }
+    .tree-item .icon.html { color: #e34c26; }
+    .tree-item .icon.css { color: #563d7c; }
+    .tree-item .name { overflow: hidden; text-overflow: ellipsis; }
+    .tree-indent { display: inline-block; width: 16px; flex-shrink: 0; }
+    .tree-loading { color: #6e7681; font-style: italic; padding: 12px 14px; font-size: 12px; }
+
+    /* ── Main content area ── */
+    #main-area {
+      flex: 1; display: flex; flex-direction: column; overflow: hidden;
+      min-width: 0;
+    }
+
+    /* ── Tab bar ── */
+    #tab-bar {
+      display: flex; align-items: center; background: #010409;
+      border-bottom: 1px solid #21262d; height: 36px; flex-shrink: 0;
+      overflow-x: auto;
+    }
+    .tab {
+      display: flex; align-items: center; gap: 6px;
+      padding: 0 14px; height: 100%; font-size: 12px; color: #8b949e;
+      cursor: pointer; border-right: 1px solid #21262d;
+      white-space: nowrap; position: relative; flex-shrink: 0;
+    }
+    .tab:hover { color: #c9d1d9; }
+    .tab.active {
+      color: #c9d1d9; background: #0d1117;
+      border-top: 2px solid #f6821f;
+    }
+    .tab .close-tab {
+      font-size: 14px; line-height: 1; padding: 0 2px;
+      border-radius: 3px; opacity: 0; transition: opacity 0.1s;
+    }
+    .tab:hover .close-tab { opacity: 1; }
+    .tab .close-tab:hover { background: #21262d; }
+    .tab-spacer { flex: 1; }
+
+    /* ── Pane container (split view) ── */
+    #pane-container {
+      flex: 1; display: flex; overflow: hidden; position: relative;
+    }
+
+    .pane {
+      display: flex; flex-direction: column; overflow: hidden;
+      min-width: 0; min-height: 0;
+    }
+    .pane.horizontal { flex-direction: row; }
+    .pane iframe {
+      width: 100%; height: 100%; border: none; background: #0d1117;
+    }
+
+    /* ── Splitter (draggable divider) ── */
+    .splitter {
+      flex-shrink: 0; background: #21262d; position: relative;
+      z-index: 10;
+    }
+    .splitter.vertical { width: 4px; cursor: col-resize; }
+    .splitter.horizontal { height: 4px; cursor: row-resize; }
+    .splitter:hover, .splitter.dragging { background: #f6821f; }
+
+    /* ── File viewer pane ── */
+    .file-viewer {
+      flex: 1; overflow: auto; background: #0d1117; padding: 16px 20px;
+      font-size: 13px; line-height: 1.6; white-space: pre-wrap;
+      tab-size: 2; color: #c9d1d9;
+    }
+    .file-viewer .line-numbers {
+      float: left; text-align: right; padding-right: 16px;
+      color: #484f58; user-select: none; border-right: 1px solid #21262d;
+      margin-right: 16px;
+    }
+
+    /* ── Preview browser bar ── */
+    .preview-bar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 4px 10px; background: #161b22;
+      border-bottom: 1px solid #21262d; height: 36px; flex-shrink: 0;
+    }
+    .preview-bar input {
+      flex: 1; background: #0d1117; border: 1px solid #30363d;
+      color: #c9d1d9; padding: 4px 10px; border-radius: 6px;
+      font-family: inherit; font-size: 12px; outline: none;
+    }
+    .preview-bar input:focus { border-color: #58a6ff; }
+    .preview-bar button {
+      background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
+      padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 12px;
+    }
+    .preview-bar button:hover { background: #30363d; }
 
     /* ── Status bar ── */
     #status-bar {
-      position: fixed; bottom: 0; left: 0; right: 0;
-      height: 28px; background: #161b22; border-top: 1px solid #30363d;
-      display: flex; align-items: center; padding: 0 12px;
-      font-size: 12px; color: #8b949e; z-index: 100; gap: 16px;
+      height: 26px; background: #0550ae; display: flex;
+      align-items: center; padding: 0 12px;
+      font-size: 11px; color: #ffffffcc; z-index: 100; gap: 12px;
+      flex-shrink: 0;
     }
-    #status-bar .user { color: #58a6ff; }
-    #status-bar .state { padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
-    #status-bar .state.running { background: #23883320; color: #3fb950; }
-    #status-bar .state.stopped { background: #da363420; color: #f85149; }
-    #status-bar .state.starting { background: #d2992220; color: #d29922; }
-    #status-bar .state.unknown { background: #30363d; color: #8b949e; }
-    #status-bar .shortcuts { margin-left: auto; color: #6e7681; }
+    #status-bar .section { display: flex; align-items: center; gap: 6px; }
+    #status-bar .state-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      display: inline-block;
+    }
+    #status-bar .state-dot.running { background: #3fb950; }
+    #status-bar .state-dot.stopped { background: #f85149; }
+    #status-bar .state-dot.starting { background: #d29922; }
+    #status-bar .state-dot.unknown { background: #6e7681; }
+    #status-bar .spacer { flex: 1; }
     #status-bar kbd {
-      background: #21262d; border: 1px solid #30363d; border-radius: 3px;
-      padding: 0 4px; font-family: inherit; font-size: 11px; color: #8b949e;
+      background: #ffffff20; border: 1px solid #ffffff30; border-radius: 3px;
+      padding: 0 4px; font-family: inherit; font-size: 10px;
     }
+    #status-bar a { color: #ffffffcc; text-decoration: none; cursor: pointer; }
+    #status-bar a:hover { color: #fff; }
 
-    /* ── Overlay panel ── */
+    /* ── Overlay panels (logs, container mgmt) ── */
     .overlay {
       display: none; position: fixed; top: 0; right: 0;
-      width: 480px; height: calc(100% - 28px);
+      width: 480px; height: calc(100% - 26px);
       background: #161b22; border-left: 1px solid #30363d;
-      z-index: 90; flex-direction: column;
+      z-index: 200; flex-direction: column;
     }
     .overlay.open { display: flex; }
     .overlay-header {
@@ -51,14 +218,12 @@
     .overlay-header button:hover { background: #21262d; color: #c9d1d9; }
     .overlay-body { flex: 1; overflow-y: auto; padding: 12px 16px; }
 
-    /* ── Log entries ── */
     .log-entry { font-size: 12px; line-height: 1.8; border-bottom: 1px solid #21262d; padding: 4px 0; word-break: break-all; }
     .log-entry .ts { color: #6e7681; margin-right: 8px; }
     .log-entry .level-error { color: #f85149; }
     .log-entry .level-log { color: #8b949e; }
     .log-empty { color: #484f58; font-style: italic; padding: 24px 0; text-align: center; }
 
-    /* ── Management panel ── */
     .mgmt-section { margin-bottom: 20px; }
     .mgmt-section h3 { font-size: 13px; color: #8b949e; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
     .mgmt-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; }
@@ -72,31 +237,109 @@
     .btn-action:hover { background: #30363d; border-color: #484f58; }
     .btn-danger { border-color: #f8514930; color: #f85149; }
     .btn-danger:hover { background: #f8514920; border-color: #f85149; }
-    .btn-action:disabled { opacity: 0.5; cursor: not-allowed; }
     .test-result { margin-top: 8px; font-size: 12px; background: #0d1117; border-radius: 6px; padding: 10px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
+
+    /* ── Welcome / empty state ── */
+    .welcome {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      color: #484f58; gap: 12px;
+    }
+    .welcome h1 { font-size: 24px; color: #6e7681; font-weight: 400; }
+    .welcome .shortcuts-grid {
+      display: grid; grid-template-columns: auto auto;
+      gap: 8px 24px; margin-top: 16px; font-size: 13px;
+    }
+    .welcome .shortcuts-grid kbd {
+      background: #21262d; border: 1px solid #30363d; border-radius: 4px;
+      padding: 2px 8px; font-family: inherit; font-size: 12px; color: #8b949e;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
 
-<iframe id="terminal-frame" src="/terminal/"></iframe>
+<!-- ═══ ACTIVITY BAR ═══ -->
+<div id="ide-layout">
+  <div id="activity-bar">
+    <button class="activity-btn active" onclick="toggleSidebar('files')" title="Explorer (Ctrl+Shift+E)">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+    </button>
+    <button class="activity-btn" onclick="toggleTerminalSplit()" title="Terminal Split (Ctrl+Shift+`)">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+    </button>
+    <button class="activity-btn" onclick="togglePreview()" title="Preview Browser (Ctrl+Shift+P)">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+    </button>
+    <div class="activity-spacer"></div>
+    <button class="activity-btn" onclick="togglePanel('mgmt')" title="Container (Ctrl+K)">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+    </button>
+    <button class="activity-btn" onclick="togglePanel('logs')" title="Logs (Ctrl+L)">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+    </button>
+  </div>
 
-<!-- Logs overlay (Ctrl+L) -->
+  <!-- ═══ SIDEBAR (File Explorer) ═══ -->
+  <div id="sidebar" class="open">
+    <div class="sidebar-header">
+      <span>Explorer</span>
+      <button onclick="refreshFileTree()" title="Refresh">&#x21BB;</button>
+      <button onclick="collapseAllDirs()" title="Collapse All">&#x2262;</button>
+    </div>
+    <div id="file-tree">
+      <div class="tree-loading">Loading workspace...</div>
+    </div>
+  </div>
+
+  <!-- ═══ MAIN CONTENT ═══ -->
+  <div id="main-area">
+    <!-- Tab bar -->
+    <div id="tab-bar">
+      <div class="tab active" data-tab="terminal" onclick="activateTab('terminal')">
+        <span>&#x25B6; Claude Code</span>
+      </div>
+      <div class="tab-spacer"></div>
+    </div>
+
+    <!-- Pane container -->
+    <div id="pane-container">
+      <!-- Primary pane: Claude Code terminal -->
+      <div class="pane" id="pane-primary" style="flex: 1;">
+        <iframe id="terminal-frame" src="/terminal/"></iframe>
+      </div>
+
+      <!-- Splitter (vertical) between primary and secondary -->
+      <div class="splitter vertical" id="splitter-v" style="display: none;"
+           onmousedown="startDrag(event, 'v')"></div>
+
+      <!-- Secondary pane: aux terminal or preview -->
+      <div class="pane" id="pane-secondary" style="display: none; flex: 1;">
+        <!-- This gets populated dynamically: terminal iframe or preview browser -->
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ OVERLAYS ═══ -->
+
+<!-- Logs overlay -->
 <div class="overlay" id="logs-panel">
   <div class="overlay-header">
     <h2>Proxy Logs</h2>
     <button onclick="clearLogs()" title="Clear">&#x2715;</button>
-    <button onclick="togglePanel('logs')" title="Close (Ctrl+L)">&#x2190;</button>
+    <button onclick="togglePanel('logs')" title="Close">&#x2190;</button>
   </div>
   <div class="overlay-body" id="logs-body">
     <div class="log-empty">Logs appear here as the proxy handles requests.</div>
   </div>
 </div>
 
-<!-- Container management overlay (Ctrl+K) -->
+<!-- Container management overlay -->
 <div class="overlay" id="mgmt-panel">
   <div class="overlay-header">
     <h2>Container</h2>
-    <button onclick="togglePanel('mgmt')" title="Close (Ctrl+K)">&#x2190;</button>
+    <button onclick="togglePanel('mgmt')" title="Close">&#x2190;</button>
   </div>
   <div class="overlay-body">
     <div class="mgmt-section">
@@ -108,7 +351,7 @@
     <div class="mgmt-section">
       <h3>Actions</h3>
       <div class="mgmt-row" style="gap:12px">
-        <button class="btn-action" onclick="doRestart()">Restart Container</button>
+        <button class="btn-action" onclick="doRestart()">Restart</button>
         <button class="btn-action btn-danger" onclick="doDestroy()">Destroy</button>
       </div>
       <div class="mgmt-row">
@@ -125,20 +368,48 @@
   </div>
 </div>
 
-<!-- Status bar -->
+<!-- ═══ STATUS BAR ═══ -->
 <div id="status-bar">
-  <span class="user" id="sb-user">--</span>
-  <span class="state unknown" id="sb-state">--</span>
-  <span class="shortcuts">
-    <kbd>Ctrl+L</kbd> Logs &nbsp;
-    <kbd>Ctrl+K</kbd> Container &nbsp;
-    <kbd>Ctrl+D</kbd> Destroy
-  </span>
+  <div class="section">
+    <span class="state-dot unknown" id="sb-dot"></span>
+    <span id="sb-state">--</span>
+  </div>
+  <div class="section">
+    <span id="sb-user">--</span>
+  </div>
+  <div class="spacer"></div>
+  <div class="section" id="sb-layout-info">
+    Terminal
+  </div>
+  <div class="section">
+    <a onclick="toggleSidebar('files')"><kbd>Ctrl+Shift+E</kbd> Explorer</a>
+  </div>
+  <div class="section">
+    <a onclick="toggleTerminalSplit()"><kbd>Ctrl+Shift+`</kbd> Split</a>
+  </div>
+  <div class="section">
+    <a onclick="togglePreview()"><kbd>Ctrl+Shift+P</kbd> Preview</a>
+  </div>
 </div>
 
 <script>
-// ── Identity ──
+// ═══════════════════════════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════════════════════════
+
 let currentUser = '--';
+let sidebarOpen = true;
+let sidebarMode = 'files'; // 'files' | 'search'
+let secondaryPane = null;  // null | 'terminal' | 'preview'
+let previewPort = 3000;
+let openFiles = [];        // tabs
+let activeTab = 'terminal';
+let expandedDirs = new Set(['/workspace']);
+let fileCache = {};        // path -> entries
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Identity & status
+// ═══════════════════════════════════════════════════════════════════════════
 
 async function loadIdentity() {
   try {
@@ -148,57 +419,9 @@ async function loadIdentity() {
     document.getElementById('sb-user').textContent = currentUser;
     document.getElementById('mgmt-user').textContent = currentUser;
     document.title = 'Claudeflare Code \u2014 ' + currentUser;
-  } catch (err) {
-    console.error('Failed to load identity:', err);
-  }
+  } catch (err) { console.error('Identity load failed:', err); }
 }
 
-// ── Panel toggling ──
-function togglePanel(name) {
-  const panels = { logs: 'logs-panel', mgmt: 'mgmt-panel' };
-  const el = document.getElementById(panels[name]);
-  const isOpen = el.classList.contains('open');
-  // close all
-  Object.values(panels).forEach(id => document.getElementById(id).classList.remove('open'));
-  if (!isOpen) {
-    el.classList.add('open');
-    if (name === 'mgmt') doRefreshStatus();
-  }
-}
-
-// ── Keyboard shortcuts ──
-document.addEventListener('keydown', (e) => {
-  // Only intercept when terminal iframe is not focused, or use Ctrl+key
-  if (e.ctrlKey || e.metaKey) {
-    if (e.key === 'l') { e.preventDefault(); togglePanel('logs'); }
-    if (e.key === 'k') { e.preventDefault(); togglePanel('mgmt'); }
-    if (e.key === 'd') { e.preventDefault(); doDestroy(); }
-  }
-});
-
-// ── Logs ──
-const logEntries = [];
-function addLog(level, msg) {
-  const ts = new Date().toLocaleTimeString();
-  logEntries.push({ ts, level, msg });
-  if (logEntries.length > 200) logEntries.shift();
-  renderLogs();
-}
-function clearLogs() { logEntries.length = 0; renderLogs(); }
-function renderLogs() {
-  const body = document.getElementById('logs-body');
-  if (logEntries.length === 0) {
-    body.innerHTML = '<div class="log-empty">No logs yet. Interact with Claude Code to generate proxy logs.</div>';
-    return;
-  }
-  body.innerHTML = logEntries.map(e =>
-    '<div class="log-entry"><span class="ts">' + e.ts + '</span><span class="level-' + e.level + '">' + escHtml(e.msg) + '</span></div>'
-  ).join('');
-  body.scrollTop = body.scrollHeight;
-}
-function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-
-// ── Status polling ──
 async function doRefreshStatus() {
   try {
     const r = await fetch('/api/status');
@@ -214,12 +437,391 @@ async function doRefreshStatus() {
 }
 
 function updateState(s) {
-  const el = document.getElementById('sb-state');
-  el.textContent = s;
-  el.className = 'state ' + (s === 'running' ? 'running' : s === 'stopped' ? 'stopped' : s === 'starting' ? 'starting' : 'unknown');
+  const dot = document.getElementById('sb-dot');
+  const label = document.getElementById('sb-state');
+  label.textContent = s;
+  dot.className = 'state-dot ' + (['running','stopped','starting'].includes(s) ? s : 'unknown');
 }
 
-// ── Actions ──
+// ═══════════════════════════════════════════════════════════════════════════
+// Sidebar
+// ═══════════════════════════════════════════════════════════════════════════
+
+function toggleSidebar(mode) {
+  const sidebar = document.getElementById('sidebar');
+  const btns = document.querySelectorAll('.activity-btn');
+
+  if (sidebarOpen && sidebarMode === mode) {
+    // Close sidebar
+    sidebar.classList.remove('open');
+    sidebarOpen = false;
+    btns[0].classList.remove('active');
+    return;
+  }
+
+  sidebar.classList.add('open');
+  sidebarOpen = true;
+  sidebarMode = mode;
+  btns[0].classList.add('active');
+
+  if (mode === 'files') refreshFileTree();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// File tree
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function refreshFileTree() {
+  const tree = document.getElementById('file-tree');
+  tree.innerHTML = '<div class="tree-loading">Loading...</div>';
+
+  try {
+    await loadDirEntries('/workspace');
+    renderFileTree();
+  } catch (err) {
+    tree.innerHTML = '<div class="tree-loading">Failed to load workspace</div>';
+  }
+}
+
+async function loadDirEntries(path) {
+  const r = await fetch('/api/files?path=' + encodeURIComponent(path));
+  const d = await r.json();
+  fileCache[path] = d.entries || [];
+  return d.entries || [];
+}
+
+function renderFileTree() {
+  const tree = document.getElementById('file-tree');
+  const html = renderDir('/workspace', 0);
+  tree.innerHTML = html || '<div class="tree-loading">Empty workspace</div>';
+}
+
+function renderDir(path, depth) {
+  const entries = fileCache[path] || [];
+  let html = '';
+
+  // Sort: dirs first, then files, alphabetically
+  const dirs = entries.filter(e => e.type === 'directory').sort((a,b) => a.name.localeCompare(b.name));
+  const files = entries.filter(e => e.type !== 'directory').sort((a,b) => a.name.localeCompare(b.name));
+
+  for (const entry of [...dirs, ...files]) {
+    const fullPath = path + '/' + entry.name;
+    const indent = '<span class="tree-indent"></span>'.repeat(depth);
+    const isDir = entry.type === 'directory';
+    const isExpanded = expandedDirs.has(fullPath);
+
+    if (isDir) {
+      const arrow = isExpanded ? '&#x25BE;' : '&#x25B8;';
+      html += `<div class="tree-item" onclick="toggleDir('${esc(fullPath)}')" title="${esc(fullPath)}">
+        ${indent}<span class="icon">${arrow}</span><span class="icon dir">&#x1F4C1;</span><span class="name">${esc(entry.name)}</span>
+      </div>`;
+      if (isExpanded) {
+        html += renderDir(fullPath, depth + 1);
+      }
+    } else {
+      const ext = entry.name.split('.').pop()?.toLowerCase() || '';
+      const iconClass = getFileIconClass(ext);
+      html += `<div class="tree-item" onclick="openFile('${esc(fullPath)}')" title="${esc(fullPath)}">
+        ${indent}<span class="tree-indent"></span><span class="icon ${iconClass}">${getFileIcon(ext)}</span><span class="name">${esc(entry.name)}</span>
+      </div>`;
+    }
+  }
+  return html;
+}
+
+async function toggleDir(path) {
+  if (expandedDirs.has(path)) {
+    expandedDirs.delete(path);
+  } else {
+    expandedDirs.add(path);
+    if (!fileCache[path]) {
+      await loadDirEntries(path);
+    }
+  }
+  renderFileTree();
+}
+
+function collapseAllDirs() {
+  expandedDirs.clear();
+  expandedDirs.add('/workspace');
+  renderFileTree();
+}
+
+function getFileIconClass(ext) {
+  const map = { ts: 'ts', tsx: 'ts', js: 'js', jsx: 'js', json: 'json', md: 'md', py: 'py', html: 'html', css: 'css' };
+  return 'file ' + (map[ext] || '');
+}
+
+function getFileIcon(ext) {
+  const icons = {
+    ts: 'TS', tsx: 'TS', js: 'JS', jsx: 'JS', json: '{}', md: '#',
+    py: 'PY', rs: 'RS', go: 'GO', html: '&lt;&gt;', css: '#',
+    sh: '$', yml: 'Y', yaml: 'Y', toml: 'T',
+  };
+  return icons[ext] || '&#x1F4C4;';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// File viewer (read-only)
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function openFile(path) {
+  const fileName = path.split('/').pop();
+
+  // Check if tab already open
+  const existing = openFiles.find(f => f.path === path);
+  if (existing) {
+    activateTab(path);
+    return;
+  }
+
+  // Fetch file content
+  try {
+    const r = await fetch('/api/files/read?path=' + encodeURIComponent(path));
+    const d = await r.json();
+    if (d.error) { addLog('error', d.error); return; }
+
+    openFiles.push({ path, name: fileName, content: d.content, language: d.language });
+    renderTabs();
+    activateTab(path);
+  } catch (err) {
+    addLog('error', 'Failed to open file: ' + err.message);
+  }
+}
+
+function closeTab(path, ev) {
+  if (ev) ev.stopPropagation();
+  openFiles = openFiles.filter(f => f.path !== path);
+  if (activeTab === path) {
+    activeTab = openFiles.length > 0 ? openFiles[openFiles.length - 1].path : 'terminal';
+  }
+  renderTabs();
+  showActivePane();
+}
+
+function activateTab(tabId) {
+  activeTab = tabId;
+  renderTabs();
+  showActivePane();
+}
+
+function renderTabs() {
+  const bar = document.getElementById('tab-bar');
+  let html = `<div class="tab ${activeTab === 'terminal' ? 'active' : ''}" data-tab="terminal" onclick="activateTab('terminal')">
+    <span>&#x25B6; Claude Code</span>
+  </div>`;
+
+  for (const f of openFiles) {
+    const isActive = activeTab === f.path;
+    html += `<div class="tab ${isActive ? 'active' : ''}" onclick="activateTab('${esc(f.path)}')">
+      <span>${esc(f.name)}</span>
+      <span class="close-tab" onclick="closeTab('${esc(f.path)}', event)">&times;</span>
+    </div>`;
+  }
+
+  html += '<div class="tab-spacer"></div>';
+  bar.innerHTML = html;
+}
+
+function showActivePane() {
+  const primary = document.getElementById('pane-primary');
+
+  if (activeTab === 'terminal') {
+    // Show terminal iframe
+    primary.innerHTML = '<iframe id="terminal-frame" src="/terminal/"></iframe>';
+    document.getElementById('sb-layout-info').textContent = 'Terminal';
+  } else {
+    // Show file content
+    const file = openFiles.find(f => f.path === activeTab);
+    if (!file) return;
+
+    const lines = file.content.split('\n');
+    const lineNums = lines.map((_, i) => i + 1).join('\n');
+    primary.innerHTML = `<div class="file-viewer"><span class="line-numbers">${lineNums}</span>${escHtml(file.content)}</div>`;
+    document.getElementById('sb-layout-info').textContent = file.path;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Terminal split (tmux-style)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function toggleTerminalSplit() {
+  const secondary = document.getElementById('pane-secondary');
+  const splitter = document.getElementById('splitter-v');
+  const btns = document.querySelectorAll('.activity-btn');
+
+  if (secondaryPane === 'terminal') {
+    // Close split
+    secondary.style.display = 'none';
+    splitter.style.display = 'none';
+    secondaryPane = null;
+    btns[1].classList.remove('active');
+    return;
+  }
+
+  // Open terminal split
+  secondaryPane = 'terminal';
+  btns[1].classList.add('active');
+  btns[2].classList.remove('active');
+
+  secondary.innerHTML = '<iframe src="/terminal/" style="width:100%;height:100%;border:none;"></iframe>';
+  secondary.style.display = 'flex';
+  secondary.style.flex = '1';
+  splitter.style.display = 'block';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Preview browser
+// ═══════════════════════════════════════════════════════════════════════════
+
+function togglePreview() {
+  const secondary = document.getElementById('pane-secondary');
+  const splitter = document.getElementById('splitter-v');
+  const btns = document.querySelectorAll('.activity-btn');
+
+  if (secondaryPane === 'preview') {
+    // Close preview
+    secondary.style.display = 'none';
+    splitter.style.display = 'none';
+    secondaryPane = null;
+    btns[2].classList.remove('active');
+    return;
+  }
+
+  // Open preview
+  secondaryPane = 'preview';
+  btns[2].classList.add('active');
+  btns[1].classList.remove('active');
+
+  secondary.innerHTML = `
+    <div class="preview-bar">
+      <button onclick="reloadPreview()" title="Reload">&#x21BB;</button>
+      <input type="text" id="preview-url" value="/preview/${previewPort}/" placeholder="Port (e.g. 3000)"
+             onkeydown="if(event.key==='Enter')navigatePreview()">
+      <button onclick="navigatePreview()">Go</button>
+      <button onclick="cyclePreviewPort()" title="Try next port">Port: ${previewPort}</button>
+    </div>
+    <iframe id="preview-frame" src="/preview/${previewPort}/" style="flex:1;width:100%;border:none;background:#fff;"></iframe>
+  `;
+  secondary.style.display = 'flex';
+  secondary.style.flexDirection = 'column';
+  secondary.style.flex = '1';
+  splitter.style.display = 'block';
+}
+
+function navigatePreview() {
+  const url = document.getElementById('preview-url')?.value;
+  if (!url) return;
+  const iframe = document.getElementById('preview-frame');
+  if (iframe) iframe.src = url;
+}
+
+function reloadPreview() {
+  const iframe = document.getElementById('preview-frame');
+  if (iframe) iframe.src = iframe.src;
+}
+
+function cyclePreviewPort() {
+  const ports = [3000, 5173, 5174, 4321, 8000, 8080, 8888];
+  const idx = ports.indexOf(previewPort);
+  previewPort = ports[(idx + 1) % ports.length];
+  if (secondaryPane === 'preview') togglePreview(); // refresh
+  togglePreview();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Splitter drag
+// ═══════════════════════════════════════════════════════════════════════════
+
+let dragState = null;
+
+function startDrag(e, direction) {
+  e.preventDefault();
+  const splitter = document.getElementById('splitter-v');
+  const primary = document.getElementById('pane-primary');
+  const secondary = document.getElementById('pane-secondary');
+  const container = document.getElementById('pane-container');
+
+  splitter.classList.add('dragging');
+  dragState = {
+    direction,
+    startX: e.clientX,
+    startY: e.clientY,
+    primaryStart: primary.getBoundingClientRect().width,
+    totalSize: container.getBoundingClientRect().width,
+  };
+
+  document.addEventListener('mousemove', onDrag);
+  document.addEventListener('mouseup', stopDrag);
+}
+
+function onDrag(e) {
+  if (!dragState) return;
+  const primary = document.getElementById('pane-primary');
+  const secondary = document.getElementById('pane-secondary');
+  const dx = e.clientX - dragState.startX;
+  const newPrimary = Math.max(200, Math.min(dragState.totalSize - 200, dragState.primaryStart + dx));
+  const newSecondary = dragState.totalSize - newPrimary - 4; // splitter width
+
+  primary.style.flex = 'none';
+  primary.style.width = newPrimary + 'px';
+  secondary.style.flex = 'none';
+  secondary.style.width = newSecondary + 'px';
+}
+
+function stopDrag() {
+  if (dragState) {
+    document.getElementById('splitter-v')?.classList.remove('dragging');
+    dragState = null;
+  }
+  document.removeEventListener('mousemove', onDrag);
+  document.removeEventListener('mouseup', stopDrag);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Overlay panels
+// ═══════════════════════════════════════════════════════════════════════════
+
+function togglePanel(name) {
+  const panels = { logs: 'logs-panel', mgmt: 'mgmt-panel' };
+  const el = document.getElementById(panels[name]);
+  const isOpen = el.classList.contains('open');
+  Object.values(panels).forEach(id => document.getElementById(id).classList.remove('open'));
+  if (!isOpen) {
+    el.classList.add('open');
+    if (name === 'mgmt') doRefreshStatus();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Logs
+// ═══════════════════════════════════════════════════════════════════════════
+
+const logEntries = [];
+function addLog(level, msg) {
+  const ts = new Date().toLocaleTimeString();
+  logEntries.push({ ts, level, msg });
+  if (logEntries.length > 200) logEntries.shift();
+  renderLogs();
+}
+function clearLogs() { logEntries.length = 0; renderLogs(); }
+function renderLogs() {
+  const body = document.getElementById('logs-body');
+  if (logEntries.length === 0) {
+    body.innerHTML = '<div class="log-empty">No logs yet.</div>';
+    return;
+  }
+  body.innerHTML = logEntries.map(e =>
+    '<div class="log-entry"><span class="ts">' + e.ts + '</span><span class="level-' + e.level + '">' + escHtml(e.msg) + '</span></div>'
+  ).join('');
+  body.scrollTop = body.scrollHeight;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Container actions
+// ═══════════════════════════════════════════════════════════════════════════
+
 async function doDestroy() {
   if (!confirm('Destroy your container? You will need to relaunch.')) return;
   addLog('log', 'Destroying container...');
@@ -228,7 +830,6 @@ async function doDestroy() {
     const d = await r.json();
     addLog('log', 'Destroyed: ' + d.message);
     updateState('stopped');
-    document.getElementById('mgmt-state').textContent = 'stopped';
   } catch (err) { addLog('error', 'Destroy error: ' + err.message); }
 }
 
@@ -240,7 +841,9 @@ async function doRestart() {
     addLog('log', 'Restart: ' + d.message);
     updateState('starting');
     setTimeout(() => {
-      document.getElementById('terminal-frame').src = '/terminal/';
+      if (activeTab === 'terminal') {
+        document.getElementById('pane-primary').innerHTML = '<iframe id="terminal-frame" src="/terminal/"></iframe>';
+      }
       addLog('log', 'Terminal reloaded');
     }, 3000);
   } catch (err) { addLog('error', 'Restart error: ' + err.message); }
@@ -249,7 +852,6 @@ async function doRestart() {
 async function doTestProxy() {
   const el = document.getElementById('test-result');
   el.innerHTML = '<div class="test-result">Testing AIG proxy...</div>';
-  addLog('log', 'Testing AIG proxy...');
   try {
     const r = await fetch('/api/test-proxy');
     const d = await r.json();
@@ -257,14 +859,43 @@ async function doTestProxy() {
     addLog(d.status === 200 ? 'log' : 'error', 'Proxy test: status=' + d.status);
   } catch (err) {
     el.innerHTML = '<div class="test-result" style="color:#f85149">' + escHtml(err.message) + '</div>';
-    addLog('error', 'Proxy test error: ' + err.message);
   }
 }
 
-// ── Init ──
+// ═══════════════════════════════════════════════════════════════════════════
+// Keyboard shortcuts
+// ═══════════════════════════════════════════════════════════════════════════
+
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey) {
+    if (e.key === 'E' || e.key === 'e') { e.preventDefault(); toggleSidebar('files'); }
+    if (e.key === '`') { e.preventDefault(); toggleTerminalSplit(); }
+    if (e.key === 'P' || e.key === 'p') { e.preventDefault(); togglePreview(); }
+  }
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
+    if (e.key === 'l') { e.preventDefault(); togglePanel('logs'); }
+    if (e.key === 'k') { e.preventDefault(); togglePanel('mgmt'); }
+    if (e.key === 'd') { e.preventDefault(); doDestroy(); }
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Utils
+// ═══════════════════════════════════════════════════════════════════════════
+
+function esc(s) { return s.replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════════════════════════
+
 loadIdentity();
 doRefreshStatus();
 setInterval(doRefreshStatus, 30000);
+
+// Load file tree after a short delay (wait for container to be ready)
+setTimeout(refreshFileTree, 2000);
 </script>
 
 </body>

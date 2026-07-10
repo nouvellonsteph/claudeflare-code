@@ -36,6 +36,9 @@ RUN mkdir -p /home/coder/.claude
 COPY container_src/claude-settings.json /home/coder/.claude/settings.json
 RUN chown -R coder:coder /home/coder/.claude
 
+# Copy the lightweight command execution helper (Node.js HTTP server on port 8081)
+COPY container_src/exec-server.mjs /usr/local/bin/exec-server.mjs
+
 # Copy entrypoint
 COPY container_src/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
@@ -43,6 +46,7 @@ RUN chmod +x /entrypoint.sh
 USER coder
 WORKDIR /workspace
 
-EXPOSE 8080
+# 8080 = ttyd (web terminal), 8081 = exec helper (file API)
+EXPOSE 8080 8081
 
 ENTRYPOINT ["/entrypoint.sh"]

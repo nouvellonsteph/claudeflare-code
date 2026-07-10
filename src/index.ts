@@ -214,6 +214,29 @@ export class ClaudeCodeContainer extends Container<Env> {
 			return new Response("Container destroyed");
 		}
 
+		// Execute a command inside the container (used by file explorer API)
+		if (pathname === "/admin/exec" && request.method === "POST") {
+			try {
+				const body: any = await request.json();
+				const cmd = body.cmd as string;
+				if (!cmd) return new Response("cmd required", { status: 400 });
+
+				// Execute via containerFetch by calling a shell command endpoint
+				// We use the ttyd's underlying bash to execute commands
+				const execUrl = new URL(request.url);
+				execUrl.pathname = "/";
+
+				// Use a helper script approach: write cmd to a temp file and execute via bash
+				// For now, use the container's bash directly via a separate approach
+				const result = await this.execInContainer(cmd);
+				return new Response(result, {
+					headers: { "content-type": "text/plain" },
+				});
+			} catch (err: any) {
+				return new Response(`exec error: ${err.message}`, { status: 500 });
+			}
+		}
+
 		if (pathname === "/admin/status") {
 			const state = await this.getState();
 			return Response.json({
@@ -247,6 +270,20 @@ export class ClaudeCodeContainer extends Container<Env> {
 
 	async clearSessionComplexity(): Promise<void> {
 		await this.ctx.storage.delete("complexity");
+	}
+
+	/**
+	 * Execute a command inside the container via the helper HTTP server
+	 * running on port 8081. Returns stdout as a string.
+	 */
+	async execInContainer(cmd: string): Promise<string> {
+		const execReq = new Request("http://localhost:8081/exec", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cmd }),
+		});
+		const resp = await this.containerFetch(execReq);
+		return resp.text();
 	}
 
 	override onStart() {
@@ -664,6 +701,174 @@ app.post("/api/restart", async (c) => {
 		await container.fetch(containerReq("/admin/destroy", c.req.url, user, "POST"));
 	} catch {}
 	return Response.json({ ok: true, message: "Container destroyed, relaunch terminal", user });
+});
+
+// ---------------------------------------------------------------------------
+// File system API — virtual file explorer for the IDE interface
+// ---------------------------------------------------------------------------
+
+// GET /api/files?path=/workspace — list directory contents
+app.get("/api/files", async (c) => {
+	const user = c.get("userEmail");
+	const dirPath = c.req.query("path") || "/workspace";
+
+	// Sanitize: prevent path traversal
+	const safePath = dirPath.replace(/\.\./g, "").replace(/\/+/g, "/");
+
+	const containerId = c.env.CLAUDE_CODE_CONTAINER.idFromName(user);
+	const container = c.env.CLAUDE_CODE_CONTAINER.get(containerId);
+
+	// Execute ls inside the container via a command endpoint
+	const cmd = `ls -la --group-directories-first "${safePath}" 2>/dev/null | tail -n +2`;
+	const resp = await container.fetch(
+		new Request(new URL("/admin/exec", c.req.url).toString(), {
+			method: "POST",
+			headers: { "x-user-email": user, "content-type": "application/json" },
+			body: JSON.stringify({ cmd }),
+		}),
+	);
+
+	if (!resp.ok) {
+		// Fallback: return empty listing if exec isn't available
+		return Response.json({ path: safePath, entries: [], error: "exec not available" });
+	}
+
+	const output = await resp.text();
+	const entries = output
+		.split("\n")
+		.filter((line) => line.trim())
+		.map((line) => {
+			const parts = line.split(/\s+/);
+			const perms = parts[0] || "";
+			const size = parseInt(parts[4] || "0", 10);
+			const name = parts.slice(8).join(" ");
+			if (!name || name === "." || name === "..") return null;
+			return {
+				name,
+				type: perms.startsWith("d") ? "directory" : perms.startsWith("l") ? "symlink" : "file",
+				size,
+				permissions: perms,
+			};
+		})
+		.filter(Boolean);
+
+	return Response.json({ path: safePath, entries });
+});
+
+// GET /api/files/read?path=/workspace/file.ts — read file contents
+app.get("/api/files/read", async (c) => {
+	const user = c.get("userEmail");
+	const filePath = c.req.query("path");
+	if (!filePath) return Response.json({ error: "path required" }, { status: 400 });
+
+	const safePath = filePath.replace(/\.\./g, "").replace(/\/+/g, "/");
+
+	const containerId = c.env.CLAUDE_CODE_CONTAINER.idFromName(user);
+	const container = c.env.CLAUDE_CODE_CONTAINER.get(containerId);
+
+	const cmd = `cat "${safePath}" 2>/dev/null | head -c 524288`;
+	const resp = await container.fetch(
+		new Request(new URL("/admin/exec", c.req.url).toString(), {
+			method: "POST",
+			headers: { "x-user-email": user, "content-type": "application/json" },
+			body: JSON.stringify({ cmd }),
+		}),
+	);
+
+	if (!resp.ok) {
+		return Response.json({ error: "Could not read file" }, { status: 500 });
+	}
+
+	const content = await resp.text();
+	// Guess language from extension
+	const ext = safePath.split(".").pop()?.toLowerCase() || "";
+	const langMap: Record<string, string> = {
+		ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+		py: "python", rs: "rust", go: "go", java: "java", json: "json",
+		yaml: "yaml", yml: "yaml", md: "markdown", html: "html", css: "css",
+		sh: "bash", bash: "bash", toml: "toml", sql: "sql", xml: "xml",
+	};
+
+	return Response.json({
+		path: safePath,
+		content,
+		language: langMap[ext] || "plaintext",
+		size: content.length,
+	});
+});
+
+// GET /api/files/tree?path=/workspace&depth=3 — recursive tree listing
+app.get("/api/files/tree", async (c) => {
+	const user = c.get("userEmail");
+	const dirPath = c.req.query("path") || "/workspace";
+	const depth = Math.min(parseInt(c.req.query("depth") || "2", 10), 5);
+
+	const safePath = dirPath.replace(/\.\./g, "").replace(/\/+/g, "/");
+
+	const containerId = c.env.CLAUDE_CODE_CONTAINER.idFromName(user);
+	const container = c.env.CLAUDE_CODE_CONTAINER.get(containerId);
+
+	// Use find with maxdepth for tree structure, exclude node_modules and .git
+	const cmd = `find "${safePath}" -maxdepth ${depth} -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/__pycache__/*' 2>/dev/null | head -500 | sort`;
+	const resp = await container.fetch(
+		new Request(new URL("/admin/exec", c.req.url).toString(), {
+			method: "POST",
+			headers: { "x-user-email": user, "content-type": "application/json" },
+			body: JSON.stringify({ cmd }),
+		}),
+	);
+
+	if (!resp.ok) {
+		return Response.json({ path: safePath, tree: [] });
+	}
+
+	const output = await resp.text();
+	const paths = output.split("\n").filter((p) => p.trim());
+
+	return Response.json({ path: safePath, tree: paths });
+});
+
+// ---------------------------------------------------------------------------
+// Preview proxy — forward to web servers running inside the container
+// ---------------------------------------------------------------------------
+
+// /preview/:port/* — proxy to container port (for dev servers, etc.)
+app.all("/preview/:port/*", async (c) => {
+	const user = c.get("userEmail");
+	const port = c.req.param("port");
+
+	if (!/^\d+$/.test(port) || parseInt(port) < 1024 || parseInt(port) > 65535) {
+		return Response.json({ error: "Invalid port. Use 1024-65535." }, { status: 400 });
+	}
+
+	const containerId = c.env.CLAUDE_CODE_CONTAINER.idFromName(user);
+	const container = c.env.CLAUDE_CODE_CONTAINER.get(containerId);
+
+	// Build the proxied URL: strip /preview/:port prefix, forward rest
+	const url = new URL(c.req.url);
+	const pathAfterPrefix = url.pathname.replace(`/preview/${port}`, "") || "/";
+	url.pathname = pathAfterPrefix;
+	url.port = port;
+
+	const headers = new Headers(c.req.raw.headers);
+	headers.set("x-user-email", user);
+	// Remove host header to avoid conflicts
+	headers.delete("host");
+
+	const proxyReq = new Request(url.toString(), {
+		method: c.req.method,
+		headers,
+		body: c.req.method !== "GET" && c.req.method !== "HEAD" ? c.req.raw.body : undefined,
+	});
+
+	try {
+		return container.fetch(proxyReq);
+	} catch (err: any) {
+		return Response.json(
+			{ error: "Preview not available", detail: err.message, hint: `No server running on port ${port} inside the container.` },
+			{ status: 502 },
+		);
+	}
 });
 
 // GET /api/test-proxy — test AIG proxy with a minimal request

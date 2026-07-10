@@ -29,6 +29,9 @@ if [ -z "$CLAUDE_LAUNCHED" ]; then
 fi
 BASHRC
 
+# Start the exec helper server in the background (used by IDE file explorer)
+node /usr/local/bin/exec-server.mjs &
+
 exec ttyd \
   --port 8080 \
   --writable \
