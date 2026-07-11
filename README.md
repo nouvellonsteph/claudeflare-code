@@ -11,7 +11,7 @@ Each user gets their own isolated container instance, authenticated via [Cloudfl
 </p>
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="Claudeflare Code architecture: Browser → Cloudflare Access → Worker → Durable Object → Container → Claude Code CLI → outboundByHost → AI Gateway → LLM Provider" width="340" />
+  <img src="docs/architecture.svg" alt="Claudeflare Code architecture: Browser → Container → Claude Code → outboundByHost intercepts anthropic.proxy → AI Gateway → LLM Provider" width="700" />
 </p>
 
 <p align="center"><sub>Rendered with <a href="https://github.com/lukilabs/beautiful-mermaid">beautiful-mermaid</a></sub></p>
