@@ -6,15 +6,11 @@ Per-user [Claude Code](https://docs.anthropic.com/en/docs/claude-code) web termi
 
 Each user gets their own isolated container instance, authenticated via [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/). No shared state between users. No direct Anthropic API access from containers.
 
-```
-Browser (Cloudflare Access)
-  └── GET /terminal/* ──> Worker ──> Container[user@email.com]
-                                          └── ttyd :8080
-                                               └── claude CLI
-                                                    └── http://anthropic.proxy
-                                                         └── outboundByHost
-                                                              └── AIG Proxy ──> AI Gateway
-```
+<p align="center">
+  <img src="docs/architecture.svg" alt="Claudeflare Code architecture: Browser → Cloudflare Access → Worker → Durable Object → Container → Claude Code CLI → outboundByHost → AI Gateway → LLM Provider" width="340" />
+</p>
+
+<p align="center"><sub>Rendered with <a href="https://github.com/lukilabs/beautiful-mermaid">beautiful-mermaid</a></sub></p>
 
 ## What it does
 
@@ -135,6 +131,14 @@ Claude Code CLI inside the container sends Anthropic Messages API requests to `h
 6. Translates the OpenAI response back to Anthropic format
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full technical breakdown.
+
+### AI Gateway metadata
+
+Every request is tagged with structured metadata visible in the AI Gateway dashboard: source, user identity, session ID, task type, and complexity classification.
+
+<p align="center">
+  <img src="docs/ai-gateway-metadata.png" alt="AI Gateway dashboard showing per-request metadata: source, user, session ID, task type, and model" width="700" />
+</p>
 
 ## Configuration
 
