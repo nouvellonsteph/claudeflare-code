@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 374.02099999999996 1448.1" width="374.02099999999996" height="1448.1" style="--bg:#0d1117;--fg:#e6edf3;--line:#3d444d;--accent:#4493f8;--muted:#9198a1;background:var(--bg)">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="proxy" data-label="API Proxy Pipeline">
+  <rect x="48" y="1135.1" width="278.02099999999996" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="48" y="1135.1" width="278.02099999999996" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="60" y="1149.1" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">API Proxy Pipeline</text>
+</g>
+<polyline class="edge" data-from="Browser" data-to="Access" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="authenticate" points="185.71374999999995,84.9 185.71374999999995,193.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Access" data-to="Worker" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="JWT" points="185.71374999999995,230.10000000000002 185.71374999999995,338.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Worker" data-to="DO" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="/terminal/*" points="185.71374999999995,375.3 185.71374999999995,483.6000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="DO" data-to="Container" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="containerFetch" points="185.71374999999995,520.5 185.71374999999995,628.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Container" data-to="ttyd" data-style="solid" data-arrow-start="false" data-arrow-end="false" points="185.71374999999995,682.5999999999999 185.71374999999995,726.5999999999999" fill="none" stroke="var(--_line)" stroke-width="1" />
+<polyline class="edge" data-from="ttyd" data-to="Claude" data-style="solid" data-arrow-start="false" data-arrow-end="false" points="185.71374999999995,763.4999999999999 185.71374999999998,807.4999999999999" fill="none" stroke="var(--_line)" stroke-width="1" />
+<polyline class="edge" data-from="Claude" data-to="Proxy" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="POST /v1/messages" points="185.71374999999998,844.3999999999999 185.71374999999998,952.6999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Proxy" data-to="AIG" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Anthropic to OpenAI
++ metadata injection" points="162.4200833333333,1006.4999999999998 162.4200833333333,1038.4999999999998 117.20849999999999,1038.4999999999998 117.20849999999999,1183.3249999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Proxy" data-to="WAI" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="complexity
+classification" points="209.00741666666664,1006.4999999999998 209.00741666666664,1038.4999999999998 254.21899999999994,1038.4999999999998 254.21899999999997,1183.3249999999998" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AIG" data-to="LLM" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="dynamic route" points="117.20849999999999,1220.2249999999997 117.20849999999999,1363.1999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Browser" data-to="Access" data-label="authenticate">
+  <rect x="148.21374999999995" y="123.9" width="74.674" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="185.55074999999994" y="139.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">authenticate</text>
+</g>
+<g class="edge-label" data-from="Access" data-to="Worker" data-label="JWT">
+  <rect x="165.21374999999995" y="269.1" width="40.816" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="185.62174999999996" y="284.25" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">JWT</text>
+</g>
+<g class="edge-label" data-from="Worker" data-to="DO" data-label="/terminal/*">
+  <rect x="152.21374999999995" y="414.30000000000007" width="66.358" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="185.39274999999995" y="429.45000000000005" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">/terminal/*</text>
+</g>
+<g class="edge-label" data-from="DO" data-to="Container" data-label="containerFetch">
+  <rect x="140.21374999999995" y="559.5" width="90.11800000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="185.27274999999997" y="574.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">containerFetch</text>
+</g>
+<g class="edge-label" data-from="Claude" data-to="Proxy" data-label="POST /v1/messages">
+  <rect x="130.21374999999998" y="883.3999999999999" width="110.908" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="185.66774999999998" y="898.5499999999998" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">POST /v1/messages</text>
+</g>
+<g class="edge-label" data-from="Proxy" data-to="AIG" data-label="Anthropic to OpenAI
++ metadata injection">
+  <rect x="61.70849999999999" y="1045.4999999999998" width="110.31400000000002" height="44.6" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="116.8655" y="1067.7999999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="116.8655" dy="-3.3000000000000007">Anthropic to OpenAI</tspan><tspan x="116.8655" dy="14.3">+ metadata injection</tspan></text>
+</g>
+<g class="edge-label" data-from="Proxy" data-to="WAI" data-label="complexity
+classification">
+  <rect x="214.21899999999994" y="1045.4999999999998" width="79.42600000000002" height="44.6" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="253.93199999999996" y="1067.7999999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="253.93199999999996" dy="-3.3000000000000007">complexity</tspan><tspan x="253.93199999999996" dy="14.3">classification</tspan></text>
+</g>
+<g class="edge-label" data-from="AIG" data-to="LLM" data-label="dynamic route">
+  <rect x="75.20849999999999" y="1293.8999999999999" width="83.584" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="117.00049999999999" y="1309.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">dynamic route</text>
+</g>
+<g class="node" data-id="Browser" data-label="Browser" data-shape="rectangle">
+  <rect x="138.80374999999998" y="48" width="93.82" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="185.71374999999998" y="66.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Browser</text>
+</g>
+<g class="node" data-id="Access" data-label="Cloudflare Access" data-shape="rectangle">
+  <rect x="110.27524999999994" y="193.2" width="150.877" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="185.71374999999995" y="211.64999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Cloudflare Access</text>
+</g>
+<g class="node" data-id="Worker" data-label="Worker" data-shape="rectangle">
+  <rect x="142.13824999999997" y="338.40000000000003" width="87.151" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="185.71374999999998" y="356.85" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Worker</text>
+</g>
+<g class="node" data-id="DO" data-label="Durable Object" data-shape="rectangle">
+  <rect x="121.39024999999995" y="483.6000000000001" width="128.647" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="185.71374999999995" y="502.05000000000007" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Durable Object</text>
+</g>
+<g class="node" data-id="Container" data-label="Container 
+ per user" data-shape="rectangle">
+  <rect x="134.72824999999995" y="628.8" width="101.971" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="185.71374999999995" y="655.6999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="185.71374999999995" dy="-3.9000000000000012">Container </tspan><tspan x="185.71374999999995" dy="16.900000000000002"> per user</tspan></text>
+</g>
+<g class="node" data-id="ttyd" data-label="ttyd :8080" data-shape="rectangle">
+  <rect x="136.95124999999996" y="726.5999999999999" width="97.525" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="185.71374999999995" y="745.05" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">ttyd :8080</text>
+</g>
+<g class="node" data-id="Claude" data-label="Claude Code CLI" data-shape="rectangle">
+  <rect x="115.83274999999998" y="807.4999999999999" width="139.762" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="185.71374999999998" y="825.9499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Claude Code CLI</text>
+</g>
+<g class="node" data-id="Proxy" data-label="outboundByHost
+anthropic.proxy" data-shape="rectangle">
+  <rect x="115.83274999999998" y="952.6999999999998" width="139.762" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="185.71374999999998" y="979.5999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="185.71374999999998" dy="-3.9000000000000012">outboundByHost</tspan><tspan x="185.71374999999998" dy="16.900000000000002">anthropic.proxy</tspan></text>
+</g>
+<g class="node" data-id="LLM" data-label="LLM Provider" data-shape="rectangle">
+  <rect x="53.99649999999998" y="1363.1999999999998" width="126.424" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="117.20849999999999" y="1381.6499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">LLM Provider</text>
+</g>
+<g class="node" data-id="AIG" data-label="AI Gateway" data-shape="rectangle">
+  <rect x="64" y="1183.3249999999998" width="106.41699999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="117.20849999999999" y="1201.7749999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">AI Gateway</text>
+</g>
+<g class="node" data-id="WAI" data-label="Workers AI
+Llama 3.2 1B" data-shape="rectangle">
+  <rect x="198.41699999999997" y="1183.3249999999998" width="111.60399999999998" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="254.21899999999997" y="1210.225" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="254.21899999999997" dy="-3.9000000000000012">Workers AI</tspan><tspan x="254.21899999999997" dy="16.900000000000002">Llama 3.2 1B</tspan></text>
+</g>
+</svg>
