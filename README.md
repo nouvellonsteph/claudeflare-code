@@ -7,6 +7,10 @@ Per-user [Claude Code](https://docs.anthropic.com/en/docs/claude-code) web termi
 Each user gets their own isolated container instance, authenticated via [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/). No shared state between users. No direct Anthropic API access from containers.
 
 <p align="center">
+  <img src="docs/claudeflare-code-screenshot.png" alt="Claudeflare Code IDE — Claude Code running in a web terminal with file explorer, creating a Cloudflare Workers hello world boilerplate" width="700" />
+</p>
+
+<p align="center">
   <img src="docs/architecture.svg" alt="Claudeflare Code architecture: Browser → Cloudflare Access → Worker → Durable Object → Container → Claude Code CLI → outboundByHost → AI Gateway → LLM Provider" width="340" />
 </p>
 
