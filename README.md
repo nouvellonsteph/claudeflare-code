@@ -20,11 +20,11 @@ Claudeflare Code gives each user an isolated Claude Code terminal in the browser
 
 User side: Browser authenticates via Cloudflare Access. The Worker maps the user's email to a Durable Object, which manages a dedicated container running ttyd + Claude Code CLI.
 
-The trick: Claude Code thinks it's talking to Anthropic, but ANTHROPIC_BASE_URL points to http://anthropic.proxy — a fake hostname. When Claude Code fetches that destination, Cloudflare Containers' outboundByHost intercepts the outbound request at the Worker layer. The interceptor translates Anthropic format to OpenAI format, injects per-user metadata (email, session ID, complexity), clamps tokens, and forwards to AI Gateway's /compat endpoint via fetch().
+The trick: Claude Code thinks it's talking to Anthropic, but `ANTHROPIC_BASE_URL` points to http://anthropic.proxy — a fake hostname. When Claude Code fetches that destination, Cloudflare Containers' `outboundByHost` intercepts the outbound request at the Worker layer. The interceptor translates Anthropic format to OpenAI format, injects per-user metadata (email, session ID, complexity), clamps tokens, and forwards to AI Gateway's /compat endpoint via `fetch()`.
 
-Why this matters: AI Gateway handles model routing, so you can swap the backing LLM without touching any code. Every request is logged with user identity and session context. A lightweight Workers AI model classifies task complexity in the background for cost analysis. Identical prompts are cached for 5 minutes at the edge.
+**Why this matters**: AI Gateway handles model routing, so you can swap the backing LLM without touching any code. Every request is logged with user identity and session context. A lightweight Workers AI model classifies task complexity in the background for cost analysis. Identical prompts are cached for 5 minutes at the edge.
 
-Claude Code never has real API credentials. The container has a fake sk-ant- key that passes local validation. Real auth happens in the Worker via the cf-aig-authorization header.
+Claude Code never has real API credentials. The container has a fake `sk-ant-` key that passes local validation. Real auth happens in the Worker via the cf-aig-authorization header.
 
 ## What it does
 
