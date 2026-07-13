@@ -360,9 +360,11 @@
       <div class="url-bar">
         <span class="proto">localhost:</span>
         <input type="number" class="port-input" id="preview-port" value="3000"
-               min="1" max="65535" onchange="setPreviewPort(this.value)">
+               min="1" max="65535"
+               onchange="setPreviewPort(this.value)"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();setPreviewPort(this.value)}">
       </div>
-      <button onclick="refreshPreview()" title="Refresh">&#x21bb;</button>
+      <button onclick="setPreviewPort(document.getElementById('preview-port').value)" title="Refresh">&#x21bb;</button>
       <button onclick="togglePreview()" title="Close">&#x2715;</button>
     </div>
     <iframe id="preview-frame" src="/preview/"></iframe>
@@ -604,6 +606,8 @@ async function viewFile(filePath) {
 }
 
 // ── Preview ──
+let _lastSyncedPort = 3000;
+
 async function setPreviewPort(port) {
   const p = parseInt(port, 10);
   if (isNaN(p) || p < 1 || p > 65535) return;
@@ -613,6 +617,8 @@ async function setPreviewPort(port) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ port: p }),
     });
+    _lastSyncedPort = p;
+    addLog('info', 'Preview port set to ' + p);
     refreshPreview();
   } catch (err) {
     addLog('error', 'Failed to set preview port: ' + err.message);

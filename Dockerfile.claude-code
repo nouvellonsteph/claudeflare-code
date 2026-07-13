@@ -47,6 +47,13 @@ RUN chown -R coder:coder /home/coder/.claude
 COPY container_src/fileserver.js /opt/fileserver.js
 COPY container_src/preview-proxy.js /opt/preview-proxy.js
 
+# Install fake browser script — intercepts xdg-open / BROWSER calls and
+# redirects them to the preview proxy so the IDE preview panel shows the
+# user's dev server automatically.
+COPY container_src/open-in-preview.sh /usr/local/bin/open-in-preview
+RUN chmod +x /usr/local/bin/open-in-preview \
+    && ln -s /usr/local/bin/open-in-preview /usr/local/bin/xdg-open
+
 # Copy entrypoint
 COPY container_src/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
