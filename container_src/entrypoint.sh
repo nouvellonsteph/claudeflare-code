@@ -16,6 +16,10 @@
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
+# Set up the fake browser so that wrangler, vite, etc. open URLs in the
+# IDE preview panel instead of trying to launch a real browser.
+export BROWSER=open-in-preview
+
 # Write the API key into Claude Code's credentials store so it treats
 # the key as already-accepted (skips the interactive confirmation dialog).
 mkdir -p ~/.claude
@@ -25,6 +29,9 @@ EOF
 
 # Print a hint so users know how to launch claude manually.
 cat >> ~/.bashrc <<'BASHRC'
+# Route "open browser" calls to the IDE preview panel
+export BROWSER=open-in-preview
+
 if [ -z "$CLAUDE_GREETED" ]; then
   export CLAUDE_GREETED=1
   echo ""
