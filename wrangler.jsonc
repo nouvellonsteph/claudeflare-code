@@ -8,6 +8,16 @@
 		"enabled": true,
 		"traces": { "enabled": true }
 	},
+	"unsafe": {
+		"bindings": [
+			{
+				"name": "GATEWAY_IDENTITY",
+				"type": "vpc_network",
+				"network_id": "cf1:network",
+				"identity": "runtime-email-alpha"
+			}
+		]
+	},
 	"upload_source_maps": true,
 
 	"assets": {

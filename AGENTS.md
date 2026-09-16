@@ -139,7 +139,7 @@ The Worker emits structured logs via `console.log`:
 
 - `[container] Stored user email: <email>` — user identity persisted to DO
 - `[outbound] POST http://anthropic.proxy/v1/messages (user: <email>)` — API call intercepted
-- `[outbound-passthrough] <method> <url>` — non-API traffic passed through
+- `[outbound-vpc] <method> <url> (user: <email>)` — non-API HTTP traffic routed through the identity-scoped VPC fetcher
 - `AIG proxy error: status=<n> <body>` — upstream error from AI Gateway
 
 ### Container logs

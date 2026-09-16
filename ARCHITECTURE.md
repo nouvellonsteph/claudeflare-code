@@ -131,7 +131,7 @@ Each `ClaudeCodeContainer` instance stores minimal state in SQLite:
 
 | Key | Type | Purpose |
 |-----|------|---------|
-| `userEmail` | `string` | User identity for AIG metadata tagging |
+| `userEmail` | `string` | Access-authenticated identity for AIG metadata and VPC egress |
 
 The email is written on every `fetch()` via the `X-User-Email` header (set by the Worker). The outbound handler reads it via the `getUserEmail()` RPC method.
 
@@ -167,7 +167,7 @@ This is purely an observability signal:
 - **Container isolation**: Each user's container is a separate Durable Object instance with its own lifecycle.
 - **No real API keys in containers**: The `ANTHROPIC_API_KEY` env var is a fake `sk-ant-` token. Real auth (`CF_AIG_TOKEN`) lives only in the Worker's secret store and is injected in the outbound handler.
 - **Outbound interception**: Containers cannot make direct calls to Anthropic. All `anthropic.proxy` traffic is intercepted and routed through the AIG proxy.
-- **Internet access**: Containers have `enableInternet = true` to pass Claude Code's connectivity check to `api.anthropic.com`, but actual API traffic goes through `http://anthropic.proxy` which is intercepted before it leaves the container network.
+- **Identity-scoped HTTP egress**: The Access-authenticated email is passed to `GATEWAY_IDENTITY.newFetcher(email)`. Both general intercepted HTTP traffic and the intercepted AI Gateway request use that VPC fetcher; egress is blocked if the email or fetcher is unavailable.
 
 ## Limitations
 

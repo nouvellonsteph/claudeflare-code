@@ -20,7 +20,7 @@ Claudeflare Code gives each user an isolated Claude Code terminal in the browser
 
 User side: Browser authenticates via Cloudflare Access. The Worker maps the user's email to a Durable Object, which manages a dedicated container running ttyd + Claude Code CLI.
 
-The trick: Claude Code thinks it's talking to Anthropic, but `ANTHROPIC_BASE_URL` points to http://anthropic.proxy — a fake hostname. When Claude Code fetches that destination, Cloudflare Containers' `outboundByHost` intercepts the outbound request at the Worker layer. The interceptor translates Anthropic format to OpenAI format, injects per-user metadata (email, session ID, complexity), clamps tokens, and forwards to AI Gateway's /compat endpoint via `fetch()`.
+The trick: Claude Code thinks it's talking to Anthropic, but `ANTHROPIC_BASE_URL` points to http://anthropic.proxy — a fake hostname. When Claude Code fetches that destination, Cloudflare Containers' `outboundByHost` intercepts the outbound request at the Worker layer. The interceptor translates Anthropic format to OpenAI format, injects per-user metadata (email, session ID, complexity), clamps tokens, and forwards to AI Gateway's /compat endpoint through an identity-scoped Workers VPC fetcher.
 
 **Why this matters**: AI Gateway handles model routing, so you can swap the backing LLM without touching any code. Every request is logged with user identity and session context. A lightweight Workers AI model classifies task complexity in the background for cost analysis. Identical prompts are cached for 5 minutes at the edge.
 
@@ -30,6 +30,7 @@ Claude Code never has real API credentials. The container has a fake `sk-ant-` k
 
 - **Isolated terminals**: Each authenticated user gets their own container running `ttyd` + Claude Code CLI, keyed by their email address.
 - **API proxy**: All Claude Code API calls are intercepted at the container boundary via `outboundByHost`, translated from Anthropic format to OpenAI format, and forwarded through AI Gateway.
+- **VPC egress**: Intercepted container HTTP traffic uses the authenticated Access email as its Cloudflare Gateway runtime identity and fails closed if identity-scoped VPC egress is unavailable.
 - **Observability**: Every request is tagged with user identity metadata in AI Gateway, giving you per-user usage visibility.
 - **Complexity tagging**: Each request is classified as `low`/`medium`/`high` complexity by a small, fast Workers AI model and tagged as AI Gateway custom metadata — transparent to the user, useful for cost/usage analysis.
 - **Caching**: Identical prompts are cached at the AI Gateway edge for 5 minutes, reducing latency and cost.
@@ -45,6 +46,7 @@ Claude Code never has real API credentials. The container has a fake `sk-ant-` k
 | [AI Gateway](https://developers.cloudflare.com/ai-gateway/) | Model routing, logging, caching, rate limiting |
 | [Workers AI](https://developers.cloudflare.com/workers-ai/) | Fast task-complexity classification for AI Gateway metadata |
 | [Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) | Zero Trust authentication (JWT) |
+| [Workers VPC](https://developers.cloudflare.com/workers-vpc/) | Identity-scoped container egress through Cloudflare Gateway |
 
 ## Prerequisites
 

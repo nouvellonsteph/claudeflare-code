@@ -69,6 +69,23 @@ interface JWKSResponse {
 	keys: JWK[];
 }
 
+interface GatewayIdentityBinding {
+	newFetcher(identity: string): Promise<Fetcher>;
+}
+
+interface ProxyOptions {
+	skipAuth?: boolean;
+	user?: string;
+	sessionId?: string | null;
+	complexity?: Complexity | null;
+	egressFetcher?: Fetcher;
+}
+
+function getGatewayIdentityBinding(env: Env): GatewayIdentityBinding {
+	// The runtime identity API is currently exposed through an unsafe alpha binding.
+	return (env as Env & { GATEWAY_IDENTITY: GatewayIdentityBinding }).GATEWAY_IDENTITY;
+}
+
 // Cache the imported CryptoKeys by kid to avoid re-fetching on every request
 let jwksCache: Map<string, CryptoKey> | null = null;
 let jwksCacheExpiry = 0;
@@ -155,7 +172,7 @@ async function verifyAccessJwt(request: Request, aud: string, certsUrl: string):
 			return null;
 		}
 
-		return payload.email || payload.sub || null;
+		return typeof payload.email === "string" && payload.email ? payload.email : null;
 	} catch (err) {
 		console.error("Access JWT verification error:", err);
 		return null;
@@ -331,6 +348,19 @@ ClaudeCodeContainer.outboundByHost = {
 			console.error("[outbound] Failed to get session state:", err);
 		}
 
+		if (user === "unknown") {
+			console.error("[outbound] Blocking egress because the authenticated user email is unavailable");
+			return new Response("Authenticated user email unavailable", { status: 502 });
+		}
+
+		let identityFetcher: Fetcher;
+		try {
+			identityFetcher = await getGatewayIdentityBinding(env).newFetcher(user);
+		} catch (err) {
+			console.error(`[outbound] Failed to create VPC identity fetcher for ${user}:`, err);
+			return new Response("VPC egress unavailable", { status: 502 });
+		}
+
 		// Clone the request body for both the proxy call and the async classifier.
 		// We need the body twice: once for handleProxy, once for session detection + extractTaskText.
 		const bodyText = await request.text();
@@ -429,21 +459,41 @@ ClaudeCodeContainer.outboundByHost = {
 			console.error("[complexity] Classification setup failed:", err);
 		}
 
-		return handleProxy(proxyRequest, env, { skipAuth: true, user, sessionId, complexity: complexity as Complexity | null });
+		return handleProxy(proxyRequest, env, {
+			skipAuth: true,
+			user,
+			sessionId,
+			complexity: complexity as Complexity | null,
+			egressFetcher: identityFetcher,
+		});
 	},
 };
 
-// Catch-all outbound handler for non-intercepted traffic
+// Route other intercepted container HTTP traffic through Gateway using the
+// authenticated Access user's email as the runtime identity.
 ClaudeCodeContainer.outbound = async (request: Request, env: Env, ctx: any) => {
-	console.log(`[outbound-passthrough] ${request.method} ${request.url}`);
-	return fetch(request);
+	try {
+		const id = env.CLAUDE_CODE_CONTAINER.idFromString(ctx.containerId);
+		const user = await env.CLAUDE_CODE_CONTAINER.get(id).getUserEmail();
+		if (!user || user === "unknown") {
+			throw new Error("Authenticated user email unavailable");
+		}
+
+		console.log(`[outbound-vpc] ${request.method} ${request.url} (user: ${user})`);
+		const identityFetcher = await getGatewayIdentityBinding(env).newFetcher(user);
+		const response = await identityFetcher.fetch(request);
+		return response;
+	} catch (err) {
+		console.error("[outbound-vpc] Blocking egress:", err);
+		return new Response("VPC egress unavailable", { status: 502 });
+	}
 };
 
 // ---------------------------------------------------------------------------
 // AIG proxy logic — main inference via fetch() to AI Gateway /compat endpoint
 // ---------------------------------------------------------------------------
 
-async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boolean; user?: string; sessionId?: string | null; complexity?: Complexity | null }): Promise<Response> {
+async function handleProxy(request: Request, env: Env, opts?: ProxyOptions): Promise<Response> {
 	const { pathname } = new URL(request.url);
 
 	// Health — no auth
@@ -572,7 +622,7 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 		? { tool_choice: body.tool_choice === "auto" ? "auto" : body.tool_choice === "any" ? "required" : body.tool_choice }
 		: {};
 
-	const resp = await fetch(
+	const gatewayRequest = new Request(
 		`https://gateway.ai.cloudflare.com/v1/${env.CLOUDFLARE_ACCOUNT_ID}/${env.GATEWAY_ID}/compat/chat/completions`,
 		{
 			method: "POST",
@@ -595,6 +645,9 @@ async function handleProxy(request: Request, env: Env, opts?: { skipAuth?: boole
 			}),
 		},
 	);
+	const resp = opts?.egressFetcher
+		? await opts.egressFetcher.fetch(gatewayRequest)
+		: await fetch(gatewayRequest);
 
 	// ---- Streaming path ----
 	if (wantsStream) {
