@@ -30,7 +30,7 @@ Claude Code never has real API credentials. The container has a fake `sk-ant-` k
 
 - **Isolated terminals**: Each authenticated user gets their own container running `ttyd` + Claude Code CLI, keyed by their email address.
 - **API proxy**: All Claude Code API calls are intercepted at the container boundary via `outboundByHost`, translated from Anthropic format to OpenAI format, and forwarded through AI Gateway.
-- **VPC egress**: Intercepted container HTTP traffic uses the authenticated Access email as its Cloudflare Gateway runtime identity and fails closed if identity-scoped VPC egress is unavailable.
+- **VPC egress**: Intercepted container HTTP and HTTPS traffic uses the authenticated Access email as its Cloudflare Gateway runtime identity and fails closed if identity-scoped VPC egress is unavailable.
 - **Observability**: Every request is tagged with user identity metadata in AI Gateway, giving you per-user usage visibility.
 - **Complexity tagging**: Each request is classified as `low`/`medium`/`high` complexity by a small, fast Workers AI model and tagged as AI Gateway custom metadata — transparent to the user, useful for cost/usage analysis.
 - **Caching**: Identical prompts are cached at the AI Gateway edge for 5 minutes, reducing latency and cost.

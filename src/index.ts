@@ -198,9 +198,10 @@ export { ContainerProxy };
 export class ClaudeCodeContainer extends Container<Env> {
 	defaultPort = 8080;
 	sleepAfter = "10m";
+	interceptHttps = true;
 	// Enable internet so connectivity check to api.anthropic.com passes.
-	// Actual API calls go to http://anthropic.proxy via ANTHROPIC_BASE_URL,
-	// which is intercepted by outboundByHost — no real Anthropic traffic.
+	// HTTP and HTTPS requests are intercepted and sent through the VPC fetcher.
+	// Actual API calls use the dedicated anthropic.proxy handler below.
 	enableInternet = true;
 
 	// Fake API key passes Claude Code's local sk-ant- validation.

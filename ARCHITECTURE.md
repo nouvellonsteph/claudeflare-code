@@ -167,7 +167,7 @@ This is purely an observability signal:
 - **Container isolation**: Each user's container is a separate Durable Object instance with its own lifecycle.
 - **No real API keys in containers**: The `ANTHROPIC_API_KEY` env var is a fake `sk-ant-` token. Real auth (`CF_AIG_TOKEN`) lives only in the Worker's secret store and is injected in the outbound handler.
 - **Outbound interception**: Containers cannot make direct calls to Anthropic. All `anthropic.proxy` traffic is intercepted and routed through the AIG proxy.
-- **Identity-scoped HTTP egress**: The Access-authenticated email is passed to `GATEWAY_IDENTITY.newFetcher(email)`. Both general intercepted HTTP traffic and the intercepted AI Gateway request use that VPC fetcher; egress is blocked if the email or fetcher is unavailable.
+- **Identity-scoped HTTP(S) egress**: The Access-authenticated email is passed to `GATEWAY_IDENTITY.newFetcher(email)`. General intercepted HTTP and HTTPS traffic and the intercepted AI Gateway request use that VPC fetcher; egress is blocked if the email or fetcher is unavailable. HTTPS clients trust Cloudflare's ephemeral interception CA through a per-user CA bundle prepared by the container entrypoint.
 
 ## Limitations
 
