@@ -73,6 +73,10 @@ interface GatewayIdentityBinding {
 	newFetcher(identity: string): Promise<Fetcher>;
 }
 
+interface ExperimentalContainer {
+	interceptOutboundTcp(address: string, fetcher: Fetcher): Promise<void>;
+}
+
 interface ProxyOptions {
 	skipAuth?: boolean;
 	user?: string;
@@ -198,11 +202,12 @@ export { ContainerProxy };
 export class ClaudeCodeContainer extends Container<Env> {
 	defaultPort = 8080;
 	sleepAfter = "10m";
-	interceptHttps = true;
-	// Enable internet so connectivity check to api.anthropic.com passes.
-	// HTTP and HTTPS requests are intercepted and sent through the VPC fetcher.
+	// Direct internet is disabled. HTTP and raw TCP connections are intercepted
+	// and sent through the identity-scoped VPC fetcher.
 	// Actual API calls use the dedicated anthropic.proxy handler below.
-	enableInternet = true;
+	enableInternet = false;
+	private tcpEgressIdentity?: string;
+	private tcpEgressConfiguration?: Promise<void>;
 
 	// Fake API key passes Claude Code's local sk-ant- validation.
 	// Real credentials are injected in the outbound handler.
@@ -244,12 +249,45 @@ export class ClaudeCodeContainer extends Container<Env> {
 			});
 		}
 
+		if (!userEmail) {
+			return new Response("Missing authenticated user identity", { status: 503 });
+		}
+		await this.configureTcpEgress(userEmail);
+
 		// Respect the port set by switchPort() (cf-container-target-port header).
 		// The base Container.fetch() reads this automatically, but since we
 		// override fetch() we need to handle it ourselves.
 		const targetPortHeader = request.headers.get("cf-container-target-port");
 		const targetPort = targetPortHeader ? parseInt(targetPortHeader, 10) : undefined;
 		return this.containerFetch(request, targetPort || this.defaultPort);
+	}
+
+	private async configureTcpEgress(userEmail: string): Promise<void> {
+		if (this.tcpEgressIdentity === userEmail && this.tcpEgressConfiguration) {
+			return this.tcpEgressConfiguration;
+		}
+
+		const configuration = (async () => {
+			const identityFetcher = await getGatewayIdentityBinding(this.env).newFetcher(userEmail);
+			const container = (this.ctx as unknown as { container: ExperimentalContainer }).container;
+			await Promise.all([
+				container.interceptOutboundTcp("0.0.0.0/0", identityFetcher),
+				container.interceptOutboundTcp("::/0", identityFetcher),
+			]);
+			console.log(`[container] Routed all TCP through VPC identity: ${userEmail}`);
+		})();
+
+		this.tcpEgressIdentity = userEmail;
+		this.tcpEgressConfiguration = configuration;
+		try {
+			await configuration;
+		} catch (error) {
+			if (this.tcpEgressConfiguration === configuration) {
+				this.tcpEgressIdentity = undefined;
+				this.tcpEgressConfiguration = undefined;
+			}
+			throw error;
+		}
 	}
 
 	// RPC method: called by the outbound handler (which runs in the

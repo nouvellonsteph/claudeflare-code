@@ -15,12 +15,40 @@ FROM node:22-bookworm-slim
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    ca-certificates \
-    git \
     bash \
-    tmux \
+    build-essential \
+    ca-certificates \
+    coreutils \
+    curl \
+    dnsutils \
+    file \
+    findutils \
+    gawk \
+    git \
+    grep \
+    gzip \
+    iproute2 \
+    iputils-ping \
+    jq \
+    less \
+    lsof \
+    nano \
+    net-tools \
+    openssh-client \
     procps \
+    python3 \
+    python3-pip \
+    ripgrep \
+    rsync \
+    sed \
+    sudo \
+    tar \
+    tmux \
+    tree \
+    unzip \
+    vim-tiny \
+    wget \
+    zip \
     && rm -rf /var/lib/apt/lists/*
 
 # Install ttyd (web terminal)
@@ -32,8 +60,11 @@ RUN curl -fsSL https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_
 RUN npm install -g @anthropic-ai/claude-code \
     && claude --version
 
-# Create non-root user
-RUN useradd -m -s /bin/bash coder
+# Create non-root user with passwordless sudo for the interactive IDE terminal.
+RUN useradd -m -s /bin/bash -G sudo coder \
+    && printf 'coder ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/coder \
+    && chmod 0440 /etc/sudoers.d/coder \
+    && ln -s /usr/sbin/ifconfig /usr/local/bin/ifconfig
 
 # Create workspace
 RUN mkdir -p /workspace && chown coder:coder /workspace
