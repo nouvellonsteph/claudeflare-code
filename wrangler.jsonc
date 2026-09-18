@@ -3,7 +3,7 @@
 	"name": "claudeflare-code",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-07-09",
-	"compatibility_flags": ["nodejs_compat", "experimental"],
+	"compatibility_flags": ["nodejs_compat"],
 	"observability": {
 		"enabled": true,
 		"traces": { "enabled": true }

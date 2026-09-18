@@ -100,7 +100,7 @@ model                       →      model
 Single-file Worker using [Hono](https://hono.dev/) for routing. ~985 lines covering:
 
 - **Access JWT verification** (lines 33-168): Full RS256 JWT verification with JWK caching (10 min TTL). Validates audience, expiry, and signature.
-- **ClaudeCodeContainer class**: Extends `Container<Env>` from `@cloudflare/containers`. Configures the container runtime and registers experimental IPv4 and IPv6 TCP catch-alls for every port against the user's identity-scoped VPC fetcher before forwarding requests to the container.
+- **ClaudeCodeContainer class**: Extends `Container<Env>` from `@cloudflare/containers`. Configures the container runtime, HTTPS interception, and identity-scoped egress.
 - **Outbound handlers**: `outboundByHost` intercepts `anthropic.proxy` traffic. Catch-all `outbound` routes other intercepted HTTP traffic through the identity-scoped VPC fetcher.
 - **Complexity classification** (lines 289-420): `COMPLEXITY_ROLLOUT`, `shouldClassifyComplexity()`, `extractTaskText()`, and `classifyComplexity()` — gates and runs the small Workers AI model that produces `complexity` metadata.
 - **AIG proxy** (lines 422-604): `handleProxy()` function handling translation, auth, metadata (incl. complexity tagging), clamping, and AI Gateway forwarding.
@@ -167,7 +167,7 @@ This is purely an observability signal:
 - **Container isolation**: Each user's container is a separate Durable Object instance with its own lifecycle.
 - **No real API keys in containers**: The `ANTHROPIC_API_KEY` env var is a fake `sk-ant-` token. Real auth (`CF_AIG_TOKEN`) lives only in the Worker's secret store and is injected in the outbound handler.
 - **Outbound interception**: Containers cannot make direct calls to Anthropic. All `anthropic.proxy` traffic is intercepted and routed through the AIG proxy.
-- **Identity-scoped egress**: The Access-authenticated email is passed to `GATEWAY_IDENTITY.newFetcher(email)`. General HTTP traffic, raw IPv4/IPv6 TCP traffic on every port, and the intercepted AI Gateway request use that VPC fetcher; egress is blocked if the email or fetcher is unavailable. Raw TCP interception preserves the original TLS stream and SNI for Cloudflare Gateway enforcement. It requires the experimental Workers compatibility flag. `enableInternet` remains enabled because the current Containers SDK requires it for DNS/TLS startup; the catch-all HTTP and TCP mappings take precedence over its fallback path.
+- **Identity-scoped HTTP(S) egress**: The Access-authenticated email is passed to `GATEWAY_IDENTITY.newFetcher(email)`. General intercepted HTTP and HTTPS traffic and the intercepted AI Gateway request use that VPC fetcher; egress is blocked if the email or fetcher is unavailable. HTTPS clients trust Cloudflare's ephemeral interception CA through a per-user CA bundle prepared by the container entrypoint.
 
 ## Limitations
 
