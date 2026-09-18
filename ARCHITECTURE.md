@@ -167,7 +167,7 @@ This is purely an observability signal:
 - **Container isolation**: Each user's container is a separate Durable Object instance with its own lifecycle.
 - **No real API keys in containers**: The `ANTHROPIC_API_KEY` env var is a fake `sk-ant-` token. Real auth (`CF_AIG_TOKEN`) lives only in the Worker's secret store and is injected in the outbound handler.
 - **Outbound interception**: Containers cannot make direct calls to Anthropic. All `anthropic.proxy` traffic is intercepted and routed through the AIG proxy.
-- **Identity-scoped egress**: Direct container internet access is disabled. The Access-authenticated email is passed to `GATEWAY_IDENTITY.newFetcher(email)`. General HTTP traffic, raw IPv4/IPv6 TCP traffic on every port, and the intercepted AI Gateway request use that VPC fetcher; egress is blocked if the email or fetcher is unavailable. Raw TCP interception preserves the original TLS stream and SNI for Cloudflare Gateway enforcement. It requires the experimental Workers compatibility flag.
+- **Identity-scoped egress**: The Access-authenticated email is passed to `GATEWAY_IDENTITY.newFetcher(email)`. General HTTP traffic, raw IPv4/IPv6 TCP traffic on every port, and the intercepted AI Gateway request use that VPC fetcher; egress is blocked if the email or fetcher is unavailable. Raw TCP interception preserves the original TLS stream and SNI for Cloudflare Gateway enforcement. It requires the experimental Workers compatibility flag. `enableInternet` remains enabled because the current Containers SDK requires it for DNS/TLS startup; the catch-all HTTP and TCP mappings take precedence over its fallback path.
 
 ## Limitations
 

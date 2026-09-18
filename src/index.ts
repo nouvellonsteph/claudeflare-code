@@ -202,10 +202,10 @@ export { ContainerProxy };
 export class ClaudeCodeContainer extends Container<Env> {
 	defaultPort = 8080;
 	sleepAfter = "10m";
-	// Direct internet is disabled. HTTP and raw TCP connections are intercepted
-	// and sent through the identity-scoped VPC fetcher.
+	// The Containers SDK currently requires this for its DNS/TLS paths. HTTP and
+	// all IPv4/IPv6 TCP destinations are still intercepted before this fallback.
 	// Actual API calls use the dedicated anthropic.proxy handler below.
-	enableInternet = false;
+	enableInternet = true;
 	private tcpEgressIdentity?: string;
 	private tcpEgressConfiguration?: Promise<void>;
 
