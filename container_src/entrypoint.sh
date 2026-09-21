@@ -16,22 +16,19 @@
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
-# HTTPS interception uses an ephemeral CA injected by Cloudflare at runtime.
-# Build a user-writable bundle so common CLI tools and language runtimes trust
-# both the normal public roots and intercepted connections.
+# Preserve support for hostname-aware HTTPS interception when its runtime CA is
+# present. Raw TCP egress preserves TLS and does not inject this certificate.
 CF_CONTAINER_CA=/etc/cloudflare/certs/cloudflare-containers-ca.crt
 CF_CA_BUNDLE="$HOME/.cloudflare/ca-bundle.crt"
-if [[ ! -r "$CF_CONTAINER_CA" ]]; then
-  echo "  [error] Cloudflare Containers interception CA is unavailable" >&2
-  exit 1
+if [[ -r "$CF_CONTAINER_CA" ]]; then
+  mkdir -p "$(dirname "$CF_CA_BUNDLE")"
+  cat /etc/ssl/certs/ca-certificates.crt "$CF_CONTAINER_CA" > "$CF_CA_BUNDLE"
+  export NODE_EXTRA_CA_CERTS="$CF_CONTAINER_CA"
+  export SSL_CERT_FILE="$CF_CA_BUNDLE"
+  export CURL_CA_BUNDLE="$CF_CA_BUNDLE"
+  export GIT_SSL_CAINFO="$CF_CA_BUNDLE"
+  export REQUESTS_CA_BUNDLE="$CF_CA_BUNDLE"
 fi
-mkdir -p "$(dirname "$CF_CA_BUNDLE")"
-cat /etc/ssl/certs/ca-certificates.crt "$CF_CONTAINER_CA" > "$CF_CA_BUNDLE"
-export NODE_EXTRA_CA_CERTS="$CF_CONTAINER_CA"
-export SSL_CERT_FILE="$CF_CA_BUNDLE"
-export CURL_CA_BUNDLE="$CF_CA_BUNDLE"
-export GIT_SSL_CAINFO="$CF_CA_BUNDLE"
-export REQUESTS_CA_BUNDLE="$CF_CA_BUNDLE"
 
 # Set up the fake browser so that wrangler, vite, etc. open URLs in the
 # IDE preview panel instead of trying to launch a real browser.

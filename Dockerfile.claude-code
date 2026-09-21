@@ -56,8 +56,9 @@ RUN curl -fsSL https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_
     -o /usr/local/bin/ttyd \
     && chmod +x /usr/local/bin/ttyd
 
-# Install Claude Code CLI globally
-RUN npm install -g @anthropic-ai/claude-code \
+# Install the latest Claude Code so custom model-picker behavior stays aligned
+# with the model catalog bundled into the CLI.
+RUN npm install -g @anthropic-ai/claude-code@latest \
     && claude --version
 
 # Create non-root user with passwordless sudo for the interactive IDE terminal.
@@ -88,6 +89,8 @@ RUN chmod +x /usr/local/bin/open-in-preview \
 # Copy entrypoint
 COPY container_src/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+ENV CLAUDEFLARE_EGRESS_SCOPE=tcp-10.154.0.33-all-ports
 
 USER coder
 WORKDIR /workspace

@@ -73,6 +73,10 @@ interface GatewayIdentityBinding {
 	newFetcher(identity: string): Promise<Fetcher>;
 }
 
+interface ExperimentalContainer {
+	interceptOutboundTcp(address: string, fetcher: Fetcher): Promise<void>;
+}
+
 interface ProxyOptions {
 	skipAuth?: boolean;
 	user?: string;
@@ -188,6 +192,14 @@ async function verifyAccessJwt(request: Request, aud: string, certsUrl: string):
 // env.AI.run() with gateway options so routing, logging, caching, and
 // metadata are handled uniformly via the Workers AI binding.
 const ROUTE = `dynamic/${globalEnv.GATEWAY_ID}`;
+const CLAUDE_MODEL_ALIAS = "dynamic/gateway";
+const CONTAINER_GENERATION = "deny-public-egress-http-tcp-v2";
+const MODEL_CONTEXT_WINDOW = 200_000;
+
+function getContainerForUser(env: Env, user: string) {
+	const id = env.CLAUDE_CODE_CONTAINER.idFromName(`${CONTAINER_GENERATION}:${user}`);
+	return env.CLAUDE_CODE_CONTAINER.get(id);
+}
 
 // ---------------------------------------------------------------------------
 // Container class for Claude Code web terminals
@@ -199,10 +211,12 @@ export class ClaudeCodeContainer extends Container<Env> {
 	defaultPort = 8080;
 	sleepAfter = "10m";
 	interceptHttps = true;
-	// Enable internet so the SDK can initialize its DNS/TLS paths. HTTP and HTTPS
-	// requests are intercepted and sent through the identity-scoped VPC fetcher.
-	// Actual API calls use the dedicated anthropic.proxy handler below.
-	enableInternet = true;
+	// Deny public internet fallback. HTTP/HTTPS can leave only through the
+	// identity-scoped outbound handlers, while raw TCP is allowed only for the
+	// explicitly intercepted private SSH destination below. DNS remains available.
+	enableInternet = false;
+	private tcpEgressIdentity?: string;
+	private tcpEgressConfiguration?: Promise<void>;
 
 	// Fake API key passes Claude Code's local sk-ant- validation.
 	// Real credentials are injected in the outbound handler.
@@ -210,9 +224,9 @@ export class ClaudeCodeContainer extends Container<Env> {
 		ANTHROPIC_API_KEY: "sk-ant-fake-container-key-routed-through-aig-proxy",
 		ANTHROPIC_BASE_URL: "http://anthropic.proxy",
 		DISABLE_AUTOUPDATER: "1",
-		// Force Claude Code to use our dynamic route model name.
-		// It will send this as the "model" field in /v1/messages requests.
-		CLAUDE_MODEL: ROUTE,
+		// Keep Claude Code on the catalog-mapped alias. The proxy ignores the
+		// incoming model field and resolves the real dynamic/<gateway-id> route.
+		CLAUDE_MODEL: CLAUDE_MODEL_ALIAS,
 	};
 
 	override async fetch(request: Request): Promise<Response> {
@@ -244,12 +258,42 @@ export class ClaudeCodeContainer extends Container<Env> {
 			});
 		}
 
+		if (!userEmail) {
+			return new Response("Missing authenticated user identity", { status: 503 });
+		}
+		await this.configureTcpEgress(userEmail);
+
 		// Respect the port set by switchPort() (cf-container-target-port header).
 		// The base Container.fetch() reads this automatically, but since we
 		// override fetch() we need to handle it ourselves.
 		const targetPortHeader = request.headers.get("cf-container-target-port");
 		const targetPort = targetPortHeader ? parseInt(targetPortHeader, 10) : undefined;
 		return this.containerFetch(request, targetPort || this.defaultPort);
+	}
+
+	private async configureTcpEgress(userEmail: string): Promise<void> {
+		if (this.tcpEgressIdentity === userEmail && this.tcpEgressConfiguration) {
+			return this.tcpEgressConfiguration;
+		}
+
+		const configuration = (async () => {
+			const identityFetcher = await getGatewayIdentityBinding(this.env).newFetcher(userEmail);
+			const container = (this.ctx as unknown as { container: ExperimentalContainer }).container;
+			await container.interceptOutboundTcp("10.154.0.33", identityFetcher);
+			console.log(`[container] Routed TCP to 10.154.0.33 through VPC identity: ${userEmail}`);
+		})();
+
+		this.tcpEgressIdentity = userEmail;
+		this.tcpEgressConfiguration = configuration;
+		try {
+			await configuration;
+		} catch (error) {
+			if (this.tcpEgressConfiguration === configuration) {
+				this.tcpEgressIdentity = undefined;
+				this.tcpEgressConfiguration = undefined;
+			}
+			throw error;
+		}
 	}
 
 	// RPC method: called by the outbound handler (which runs in the
@@ -509,11 +553,11 @@ async function handleProxy(request: Request, env: Env, opts?: ProxyOptions): Pro
 		const modelId = pathname.replace("/v1/models/", "").replace("/v1/models", "");
 		if (modelId && modelId !== "") {
 			return Response.json({
-				id: ROUTE,
+				id: CLAUDE_MODEL_ALIAS,
 				type: "model",
 				display_name: "Claudeflare Code (AI Gateway)",
 				created_at: "2025-01-01T00:00:00Z",
-				max_input_tokens: 16384,
+				max_input_tokens: MODEL_CONTEXT_WINDOW,
 				max_tokens: 8192,
 				capabilities: {
 					batch: { supported: false },
@@ -532,11 +576,11 @@ async function handleProxy(request: Request, env: Env, opts?: ProxyOptions): Pro
 		return Response.json({
 			data: [
 				{
-					id: ROUTE,
+					id: CLAUDE_MODEL_ALIAS,
 					type: "model",
 					display_name: "Claudeflare Code (AI Gateway)",
 					created_at: "2025-01-01T00:00:00Z",
-					max_input_tokens: 16384,
+					max_input_tokens: MODEL_CONTEXT_WINDOW,
 					max_tokens: 8192,
 					capabilities: {
 						batch: { supported: false },
@@ -751,8 +795,7 @@ app.all("/terminal/*", async (c) => {
 
 	// Derive a unique Durable Object ID from the user's email.
 	// This guarantees each user gets their own container instance.
-	const containerId = c.env.CLAUDE_CODE_CONTAINER.idFromName(user);
-	const container = c.env.CLAUDE_CODE_CONTAINER.get(containerId);
+	const container = getContainerForUser(c.env, user);
 
 	// Strip the /terminal prefix so ttyd sees / as its root
 	const url = new URL(c.req.url);
@@ -771,8 +814,7 @@ app.all("/terminal/*", async (c) => {
 // Uses switchPort for WebSocket support (required by ttyd).
 app.all("/aux-terminal/*", async (c) => {
 	const user = c.get("userEmail");
-	const containerId = c.env.CLAUDE_CODE_CONTAINER.idFromName(user);
-	const container = c.env.CLAUDE_CODE_CONTAINER.get(containerId);
+	const container = getContainerForUser(c.env, user);
 
 	const url = new URL(c.req.url);
 	url.pathname = url.pathname.replace("/aux-terminal", "") || "/";
@@ -789,8 +831,7 @@ app.all("/aux-terminal/*", async (c) => {
 // Proxies to the Node file-server running inside the container.
 app.all("/files/*", async (c) => {
 	const user = c.get("userEmail");
-	const containerId = c.env.CLAUDE_CODE_CONTAINER.idFromName(user);
-	const container = c.env.CLAUDE_CODE_CONTAINER.get(containerId);
+	const container = getContainerForUser(c.env, user);
 
 	const url = new URL(c.req.url);
 	// Rewrite /files/api/files?path=... → /api/files?path=...
@@ -807,8 +848,7 @@ app.all("/files/*", async (c) => {
 // Proxies to the preview server running inside the container.
 app.all("/preview/*", async (c) => {
 	const user = c.get("userEmail");
-	const containerId = c.env.CLAUDE_CODE_CONTAINER.idFromName(user);
-	const container = c.env.CLAUDE_CODE_CONTAINER.get(containerId);
+	const container = getContainerForUser(c.env, user);
 
 	const url = new URL(c.req.url);
 	url.pathname = url.pathname.replace("/preview", "") || "/";
@@ -834,8 +874,7 @@ function containerReq(path: string, baseUrl: string, user: string, method = "GET
 // GET /api/status — container state
 app.get("/api/status", async (c) => {
 	const user = c.get("userEmail");
-	const containerId = c.env.CLAUDE_CODE_CONTAINER.idFromName(user);
-	const container = c.env.CLAUDE_CODE_CONTAINER.get(containerId);
+	const container = getContainerForUser(c.env, user);
 	try {
 		const resp = await container.fetch(containerReq("/admin/status", c.req.url, user));
 		return new Response(resp.body, { status: resp.status, headers: { "content-type": "application/json" } });
@@ -847,8 +886,7 @@ app.get("/api/status", async (c) => {
 // POST /api/destroy — destroy container
 app.post("/api/destroy", async (c) => {
 	const user = c.get("userEmail");
-	const containerId = c.env.CLAUDE_CODE_CONTAINER.idFromName(user);
-	const container = c.env.CLAUDE_CODE_CONTAINER.get(containerId);
+	const container = getContainerForUser(c.env, user);
 	const resp = await container.fetch(containerReq("/admin/destroy", c.req.url, user, "POST"));
 	return Response.json({ ok: true, message: await resp.text(), user });
 });
@@ -856,8 +894,7 @@ app.post("/api/destroy", async (c) => {
 // POST /api/restart — destroy then navigate to terminal
 app.post("/api/restart", async (c) => {
 	const user = c.get("userEmail");
-	const containerId = c.env.CLAUDE_CODE_CONTAINER.idFromName(user);
-	const container = c.env.CLAUDE_CODE_CONTAINER.get(containerId);
+	const container = getContainerForUser(c.env, user);
 	try {
 		await container.fetch(containerReq("/admin/destroy", c.req.url, user, "POST"));
 	} catch {}
@@ -891,8 +928,7 @@ app.get("/api/test-proxy", async (c) => {
 // Legacy HTML destroy endpoint
 app.get("/destroy", async (c) => {
 	const user = c.get("userEmail");
-	const containerId = c.env.CLAUDE_CODE_CONTAINER.idFromName(user);
-	const container = c.env.CLAUDE_CODE_CONTAINER.get(containerId);
+	const container = getContainerForUser(c.env, user);
 	const resp = await container.fetch(containerReq("/admin/destroy", c.req.url, user));
 	const text = await resp.text();
 	return c.html(`<h1>${text} for ${user}</h1><p><a href="/terminal/">Relaunch terminal</a> (takes ~30s to boot)</p>`);

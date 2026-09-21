@@ -1,6 +1,18 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "model": "dynamic/gateway",
+  "modelPicker": {
+    "options": [
+      {
+        "model": "dynamic/gateway",
+        "label": "Claudeflare Gateway",
+        "description": "Cloudflare AI Gateway dynamic route",
+        "behavesAs": "claude-sonnet-4-6"
+      }
+    ],
+    "replaceBuiltInOptions": true
+  },
   "availableModels": ["dynamic/gateway"],
-  "enforceAvailableModels": true
+  "enforceAvailableModels": true,
+  "autoCompactWindow": 200000
 }

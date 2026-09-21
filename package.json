@@ -39,9 +39,11 @@
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7",
-    "hono": "4.11.1"
+    "hono": "4.13.8"
   },
   "devDependencies": {
+    "@slidev/cli": "^53.0.0",
+    "@slidev/theme-default": "^0.25.0",
     "@types/node": "^22.0.0",
     "typescript": "5.9.3",
     "vitest": "^3.2.7",
@@ -51,6 +53,11 @@
     "cf-typegen": "wrangler types",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
+    "predeploy": "npm run slides:build",
+    "predev": "npm run slides:build",
+    "prestart": "npm run slides:build",
+    "slides": "slidev slides/slides.md --open",
+    "slides:build": "rm -rf public/slides && slidev build slides/slides.md --base /slides/ --out ../public/slides",
     "start": "wrangler dev",
     "test": "vitest run",
     "test:watch": "vitest",

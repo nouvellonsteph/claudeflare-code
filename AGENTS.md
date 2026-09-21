@@ -138,8 +138,9 @@ Every API call appears in the AI Gateway logs with:
 The Worker emits structured logs via `console.log`:
 
 - `[container] Stored user email: <email>` — user identity persisted to DO
+- `[container] Routed TCP to 10.154.0.33 through VPC identity: <email>` — all-port raw TCP interception registered for the private SSH destination
 - `[outbound] POST http://anthropic.proxy/v1/messages (user: <email>)` — API call intercepted
-- `[outbound-vpc] <method> <url> (user: <email>)` — non-API HTTP(S) traffic routed through the identity-scoped VPC fetcher
+- `[outbound-vpc] <method> <url> (user: <email>)` — non-API HTTP traffic routed through the identity-scoped VPC fetcher
 - `AIG proxy error: status=<n> <body>` — upstream error from AI Gateway
 
 ### Container logs

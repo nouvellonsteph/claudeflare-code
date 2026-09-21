@@ -4,10 +4,11 @@ This document describes the technical architecture of Claudeflare Code.
 
 ## Overview
 
-Claudeflare Code is a single Cloudflare Worker (`src/index.ts`) that serves two roles:
+Claudeflare Code is a single Cloudflare Worker (`src/index.ts`) that serves three roles:
 
 1. **Container orchestrator** — manages per-user Durable Object instances that each run a Docker container with `ttyd` + Claude Code CLI.
 2. **AI Gateway proxy** — intercepts all API calls from the container, translates between Anthropic and OpenAI formats, and forwards through Cloudflare AI Gateway. Each request is potentially tagged with a `complexity` (`low`/`medium`/`high`) custom metadata value, classified by a small Workers AI model.
+3. **Zero Trust egress boundary** — blocks direct container internet access, routes all HTTP/HTTPS through an identity-scoped Gateway fetcher, and intercepts raw TCP for the private infrastructure destination `10.154.0.33`.
 
 Everything runs on Cloudflare's network. There is no origin server.
 
@@ -100,7 +101,7 @@ model                       →      model
 Single-file Worker using [Hono](https://hono.dev/) for routing. ~985 lines covering:
 
 - **Access JWT verification** (lines 33-168): Full RS256 JWT verification with JWK caching (10 min TTL). Validates audience, expiry, and signature.
-- **ClaudeCodeContainer class**: Extends `Container<Env>` from `@cloudflare/containers`. Configures the container runtime, HTTPS interception, and identity-scoped egress.
+- **ClaudeCodeContainer class**: Extends `Container<Env>` from `@cloudflare/containers`. Before startup, registers catch-all HTTP/HTTPS interception and experimental all-port TCP interception for private destination `10.154.0.33` against the user's identity-scoped VPC fetcher.
 - **Outbound handlers**: `outboundByHost` intercepts `anthropic.proxy` traffic. Catch-all `outbound` routes other intercepted HTTP traffic through the identity-scoped VPC fetcher.
 - **Complexity classification** (lines 289-420): `COMPLEXITY_ROLLOUT`, `shouldClassifyComplexity()`, `extractTaskText()`, and `classifyComplexity()` — gates and runs the small Workers AI model that produces `complexity` metadata.
 - **AIG proxy** (lines 422-604): `handleProxy()` function handling translation, auth, metadata (incl. complexity tagging), clamping, and AI Gateway forwarding.
@@ -124,6 +125,8 @@ Environment variables injected by the DO:
 | `CLAUDE_MODEL` | `dynamic/<gateway-id>` | Model name sent in API requests |
 
 The fake API key never reaches any external service. Real authentication is handled by the outbound handler using `CF_AIG_TOKEN`.
+
+The bundled Claude Code settings expose the dynamic route as a custom model-picker row that `behavesAs` Sonnet 4.6, while preserving `dynamic/gateway` as the upstream ID. `autoCompactWindow` is fixed at 200,000 tokens so unknown-model fallback enforcement is not needed.
 
 ### Durable Object state
 
@@ -167,10 +170,11 @@ This is purely an observability signal:
 - **Container isolation**: Each user's container is a separate Durable Object instance with its own lifecycle.
 - **No real API keys in containers**: The `ANTHROPIC_API_KEY` env var is a fake `sk-ant-` token. Real auth (`CF_AIG_TOKEN`) lives only in the Worker's secret store and is injected in the outbound handler.
 - **Outbound interception**: Containers cannot make direct calls to Anthropic. All `anthropic.proxy` traffic is intercepted and routed through the AIG proxy.
-- **Identity-scoped HTTP(S) egress**: The Access-authenticated email is passed to `GATEWAY_IDENTITY.newFetcher(email)`. General intercepted HTTP and HTTPS traffic and the intercepted AI Gateway request use that VPC fetcher; egress is blocked if the email or fetcher is unavailable. HTTPS clients trust Cloudflare's ephemeral interception CA through a per-user CA bundle prepared by the container entrypoint.
+- **No direct public route**: `enableInternet = false` denies unmatched public egress. DNS remains available for explicit HTTP/HTTPS handlers, but public raw TCP has no fallback path.
+- **Identity-scoped egress**: The Access-authenticated email is passed to `GATEWAY_IDENTITY.newFetcher(email)`. All HTTP/HTTPS traffic, raw TCP traffic to `10.154.0.33`, and the intercepted AI Gateway request use that VPC fetcher. HTTPS uses the Containers interception CA.
+- **Infrastructure SSH**: The code establishes the identity-scoped TCP path. Short-lived SSH certificates additionally require an Infrastructure Access target and application, private network routing, a Gateway SSH CA, and `sshd` configured to trust that CA.
 
 ## Limitations
 
-- **Claude Code model picker**: The CLI's model selection UI is hardcoded client-side and cannot be customized via settings. The proxy ignores the `model` field and always routes through `dynamic/<gateway-id>`, so this is cosmetic only.
-- **No streaming**: Responses use `stream: false`. AI Gateway streaming support could be added but requires chunked response translation.
+- **Dynamic model contract**: The model picker uses a Sonnet 4.6 behavior profile for client-side context handling. AI Gateway can route to another provider, so the configured profile should remain at or below the minimum guaranteed capability of every route target.
 - **Single-file Worker**: All logic is in one file. For larger deployments, consider splitting into modules.

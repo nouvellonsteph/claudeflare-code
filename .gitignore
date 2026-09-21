@@ -5,3 +5,5 @@ worker-configuration.d.ts
 *.log
 .DS_Store
 dist/
+public/slides/
+slides/public/

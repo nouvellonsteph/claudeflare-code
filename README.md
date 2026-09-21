@@ -2,9 +2,9 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/nouvellonsteph/claudeflare-code)
 
-Per-user [Claude Code](https://docs.anthropic.com/en/docs/claude-code) web terminals running in [Cloudflare Containers](https://developers.cloudflare.com/containers/), with all API calls routed through [AI Gateway](https://developers.cloudflare.com/ai-gateway/) for observability, caching, and cost control.
+Per-user [Claude Code](https://docs.anthropic.com/en/docs/claude-code) web terminals running in [Cloudflare Containers](https://developers.cloudflare.com/containers/), with deny-by-default container networking and all API calls routed through [AI Gateway](https://developers.cloudflare.com/ai-gateway/) for observability, caching, and cost control.
 
-Each user gets their own isolated container instance, authenticated via [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/). No shared state between users. No direct Anthropic API access from containers.
+Each user gets their own isolated container instance, authenticated via [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/). No shared state between users. No container has a direct public internet route.
 
 <p align="center">
   <img src="docs/claudeflare-code-screenshot.png" alt="Claudeflare Code IDE — Claude Code running in a web terminal with file explorer, creating a Cloudflare Workers hello world boilerplate" width="700" />
@@ -30,7 +30,9 @@ Claude Code never has real API credentials. The container has a fake `sk-ant-` k
 
 - **Isolated terminals**: Each authenticated user gets their own container running `ttyd` + Claude Code CLI, keyed by their email address.
 - **API proxy**: All Claude Code API calls are intercepted at the container boundary via `outboundByHost`, translated from Anthropic format to OpenAI format, and forwarded through AI Gateway.
-- **VPC egress**: Intercepted container HTTP and HTTPS traffic uses the authenticated Access email as its Cloudflare Gateway runtime identity and fails closed if identity-scoped VPC egress is unavailable.
+- **Deny-by-default egress**: `enableInternet = false` removes direct public internet fallback from every container.
+- **HTTP inspection**: All container HTTP and HTTPS requests use the authenticated Access email as their Cloudflare Gateway runtime identity before policy allows or blocks them.
+- **Private infrastructure access**: Raw TCP connections on every port to private destination `10.154.0.33` use the same identity-scoped path. For SSH, Access for Infrastructure adds per-target policy, short-lived certificates, and optional command logging.
 - **Observability**: Every request is tagged with user identity metadata in AI Gateway, giving you per-user usage visibility.
 - **Complexity tagging**: Each request is classified as `low`/`medium`/`high` complexity by a small, fast Workers AI model and tagged as AI Gateway custom metadata — transparent to the user, useful for cost/usage analysis.
 - **Caching**: Identical prompts are cached at the AI Gateway edge for 5 minutes, reducing latency and cost.
@@ -47,6 +49,7 @@ Claude Code never has real API credentials. The container has a fake `sk-ant-` k
 | [Workers AI](https://developers.cloudflare.com/workers-ai/) | Fast task-complexity classification for AI Gateway metadata |
 | [Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) | Zero Trust authentication (JWT) |
 | [Workers VPC](https://developers.cloudflare.com/workers-vpc/) | Identity-scoped container egress through Cloudflare Gateway |
+| [Access for Infrastructure](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/non-http/infrastructure-apps/) | Private SSH policy and short-lived certificates |
 
 ## Prerequisites
 
@@ -55,7 +58,7 @@ Claude Code never has real API credentials. The container has a fake `sk-ant-` k
 - [AI Gateway](https://developers.cloudflare.com/ai-gateway/) configured with at least one provider
 - [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) application for the worker domain
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (for building container images)
-- Node.js 18+
+- Node.js 22.12+
 
 ## Setup
 
@@ -109,6 +112,16 @@ Create a Cloudflare Access application for your worker domain (`<name>.<subdomai
 
 Navigate to your worker URL. Cloudflare Access will prompt you to authenticate, then you'll see the terminal. Type `claude` to start a Claude Code session.
 
+The header links to the architecture presentation at `/slides/`. `npm run dev` and `npm run deploy` build it automatically. For presenter mode with live editing, run:
+
+```bash
+npm run slides
+```
+
+### 7. Configure private SSH access
+
+The Worker routes TCP for `10.154.0.33` through the identity-scoped VPC fetcher. To use short-lived SSH certificates, configure the matching private route and Infrastructure Access target, create an Access for Infrastructure application, generate the Gateway SSH CA, and configure the target's `sshd` to trust that CA. These account-side controls are intentionally not created by this repository.
+
 ## Project structure
 
 ```
@@ -118,6 +131,7 @@ claudeflare-code/
 ├── container_src/
 │   ├── entrypoint.sh          # Container startup: ttyd on port 8080
 │   └── claude-settings.json   # Claude Code model configuration
+├── slides/                     # Slidev deck and interactive architecture diagram
 ├── Dockerfile.claude-code     # Container image: node + ttyd + claude-code CLI
 ├── wrangler.jsonc              # Wrangler config (fill in your values)
 ├── .dev.vars.example          # Secret template (copy to .dev.vars)
@@ -174,6 +188,8 @@ In `src/index.ts`:
 - Cache TTL: AI Gateway cache duration (300s / 5 minutes via `cf-aig-cache-ttl` header)
 - `COMPLEXITY_MODEL`: Workers AI model used for complexity classification (`@cf/meta/llama-3.2-1b-instruct` by default)
 - `COMPLEXITY_ROLLOUT`: Single on/off + sample-rate control for complexity classification — set `enabled: false` to disable for everyone, or tune `sampleRate` (0–1) to roll it out to a fraction of requests (deterministic per-user, not per-request)
+
+Claude Code maps `dynamic/gateway` to a known Sonnet behavior profile with a custom `modelPicker` row and compacts at 200,000 tokens. The dynamic route remains the model ID sent upstream; AI Gateway still selects the provider.
 
 ## License
 

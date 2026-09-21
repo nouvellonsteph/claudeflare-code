@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Claudeflare Code</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><text x='5' y='23' font-family='monospace' font-size='20' font-weight='bold' fill='%23f6821f'>%3E_</text></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23FFFBF5'/><text x='5' y='23' font-family='monospace' font-size='20' font-weight='500' fill='%23FF4801'>%3E_</text></svg>">
   <style>
     /* ═══════════════════════════════════════════════════════════════════════
        CSS — Claudeflare Code IDE
@@ -302,9 +302,224 @@
     body.resizing iframe {
       pointer-events: none;
     }
+
+    /* Workers visual system ------------------------------------------------ */
+    :root {
+      --bg-0: #171717;
+      --bg-1: #fffdfb;
+      --bg-2: #fef7ed;
+      --bg-3: #ebd5c1;
+      --fg-0: #521000;
+      --fg-1: rgba(82, 16, 0, 0.68);
+      --fg-2: rgba(82, 16, 0, 0.48);
+      --fg-3: rgba(82, 16, 0, 0.3);
+      --accent: #ff4801;
+      --accent-dim: rgba(255, 72, 1, 0.12);
+      --blue: #0a95ff;
+      --green: #15803d;
+      --red: #c24137;
+      --yellow: #9a6700;
+      --font-sans: "FT Kunst Grotesk", "Avenir Next", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: "Apercu Mono Pro", "SF Mono", "Fira Code", Consolas, monospace;
+      --header-h: 56px;
+      --status-h: 32px;
+      --sidebar-w: 268px;
+      --tab-h: 40px;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background-color: #fffbf5;
+      background-image:
+        radial-gradient(circle at 2.5px 2.5px, rgba(235, 213, 193, 0.66) 0.75px, transparent 0.8px),
+        radial-gradient(circle at 5px 7.5px, rgba(235, 213, 193, 0.66) 0.75px, transparent 0.8px);
+      background-size: 6.5px 10px;
+    }
+
+    button, input { font-family: var(--font-sans); }
+    button:focus-visible, input:focus-visible, .file-entry:focus-visible {
+      outline: 2px solid rgba(255, 72, 1, 0.45);
+      outline-offset: 2px;
+    }
+
+    #product-bar {
+      height: var(--header-h);
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 0 18px;
+      color: var(--fg-0);
+      background: rgba(255, 251, 245, 0.94);
+      border-bottom: 1px dashed var(--bg-3);
+      backdrop-filter: blur(14px);
+    }
+    .product-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .brand-mark {
+      display: grid; place-items: center;
+      width: 34px; height: 34px;
+      border: 1px solid var(--accent); border-radius: 9px;
+      color: var(--accent); background: #fffdfb;
+      box-shadow: 3px 3px 0 rgba(255, 72, 1, 0.1);
+      font: 500 14px/1 var(--font-mono);
+    }
+    .brand-copy { display: flex; flex-direction: column; min-width: 0; }
+    .brand-copy strong { font-size: 14px; font-weight: 500; letter-spacing: -0.02em; }
+    .brand-copy span { font-size: 10px; color: var(--fg-2); font-family: var(--font-mono); }
+    .deck-link {
+      padding: 7px 12px; color: var(--accent); border: 1px solid rgba(255, 72, 1, 0.35);
+      border-radius: 999px; background: rgba(255, 72, 1, 0.06); font-size: 11px;
+      font-weight: 500; text-decoration: none;
+    }
+    .deck-link:hover { border-style: dashed; background: rgba(255, 72, 1, 0.11); }
+    .security-route {
+      margin-left: auto;
+      display: flex; align-items: center; gap: 7px;
+      font-family: var(--font-mono); font-size: 10px;
+    }
+    .route-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 10px; border: 1px solid var(--bg-3); border-radius: 999px;
+      color: var(--fg-1); background: rgba(255, 253, 251, 0.86);
+    }
+    .route-pill::before {
+      content: ""; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--accent); box-shadow: 0 0 0 3px rgba(255, 72, 1, 0.1);
+    }
+    .route-pill.private::before { background: #0a95ff; box-shadow: 0 0 0 3px rgba(10, 149, 255, 0.1); }
+    .route-pill.blocked::before { background: #15803d; box-shadow: 0 0 0 3px rgba(21, 128, 61, 0.1); }
+
+    #ide {
+      height: calc(100vh - var(--header-h) - var(--status-h));
+      max-width: 1480px;
+      margin: 0 auto;
+      border-left: 1px dashed rgba(235, 213, 193, 0.8);
+      border-right: 1px dashed rgba(235, 213, 193, 0.8);
+      background: #fffdfb;
+    }
+    #sidebar, .tab-bar, .aux-header, .preview-header, #status-bar, .overlay { background: #fffdfb; }
+    #sidebar { border-right: 1px solid var(--bg-3); position: relative; }
+    #sidebar::before, #sidebar::after {
+      content: ""; position: absolute; right: -4px; width: 7px; height: 7px; z-index: 2;
+      border: 1px solid var(--bg-3); border-radius: 1.5px; background: #fffbf5;
+    }
+    #sidebar::before { top: 7px; }
+    #sidebar::after { bottom: 7px; }
+    .sidebar-header {
+      height: var(--tab-h); padding: 0 12px;
+      color: var(--fg-1); font-size: 10px; font-weight: 500; letter-spacing: 0.08em;
+      border-bottom: 1px dashed var(--bg-3);
+    }
+    .sidebar-header button, .tab-actions button, .aux-header button, .preview-header button, .overlay-header button {
+      min-width: 28px; min-height: 28px; border: 1px solid transparent; border-radius: 999px;
+      color: var(--fg-2);
+    }
+    .sidebar-header button:hover, .tab-actions button:hover, .aux-header button:hover, .preview-header button:hover, .overlay-header button:hover {
+      color: var(--accent); background: var(--accent-dim); border-color: rgba(255, 72, 1, 0.28); border-style: dashed;
+    }
+    .breadcrumb { padding: 7px 12px; color: var(--fg-2); border-bottom: 1px solid rgba(235, 213, 193, 0.7); }
+    .breadcrumb span { color: var(--accent); }
+    .file-entry { margin: 2px 7px; padding: 6px 8px; border-radius: 6px; }
+    .file-entry:hover { color: var(--fg-0); background: var(--bg-2); }
+    .file-entry.dir .icon { color: var(--accent); }
+
+    #main-area, #aux-area, #preview-area { background: #171717; }
+    .tab-bar { padding: 0 10px; border-bottom: 1px solid var(--bg-3); }
+    .tab { height: 30px; padding: 0 13px; border: 1px solid transparent; border-radius: 999px; }
+    .tab:hover { color: var(--fg-0); background: var(--bg-2); }
+    .tab.active { color: var(--fg-0); background: #fffdfb; border: 1px solid var(--bg-3); box-shadow: none; }
+    .tab .dot { width: 7px; height: 7px; }
+    .tab-actions button.active { color: var(--accent); background: var(--accent-dim); }
+    #terminal-frame, #aux-frame, #preview-frame { background: #171717; }
+    #aux-area { border-top: 1px solid var(--bg-3); }
+    #preview-area { border-left: 1px solid var(--bg-3); }
+    .aux-header, .preview-header { border-bottom: 1px dashed var(--bg-3); }
+    .aux-header .title, .preview-header .title { color: var(--fg-0); font-weight: 500; }
+    .preview-header .url-bar { background: var(--bg-2); border-color: var(--bg-3); border-radius: 999px; }
+    .preview-header .port-input { color: var(--accent); background: transparent; border: none; }
+
+    #status-bar {
+      height: var(--status-h); padding: 0 max(14px, calc((100vw - 1440px) / 2));
+      color: var(--fg-2); border-top: 1px dashed var(--bg-3);
+      font-family: var(--font-mono);
+    }
+    #status-bar .user { color: var(--accent); }
+    #status-bar .state { padding: 3px 8px; font-weight: 500; border: 1px solid transparent; }
+    .state.running { color: #15803d; background: rgba(21, 128, 61, 0.08); border-color: rgba(21, 128, 61, 0.2) !important; }
+    #status-bar kbd { color: var(--fg-1); background: var(--bg-2); border-color: var(--bg-3); border-radius: 4px; }
+
+    .overlay {
+      top: var(--header-h); height: calc(100% - var(--header-h) - var(--status-h));
+      width: min(460px, 100vw); border-left: 1px solid var(--bg-3);
+      box-shadow: -18px 0 40px rgba(82, 16, 0, 0.08);
+    }
+    .overlay-header { border-bottom: 1px dashed var(--bg-3); }
+    .overlay-header h2 { color: var(--fg-0); font-size: 14px; font-weight: 500; }
+    .mgmt-section {
+      position: relative; padding: 14px; margin-bottom: 18px;
+      background: #fffdfb; border: 1px solid var(--bg-3);
+    }
+    .mgmt-section::before, .mgmt-section::after {
+      content: ""; position: absolute; top: -4px; width: 7px; height: 7px;
+      border: 1px solid var(--bg-3); border-radius: 1.5px; background: #fffbf5;
+    }
+    .mgmt-section::before { left: -4px; }
+    .mgmt-section::after { right: -4px; }
+    .mgmt-section h3 { color: var(--accent); font-weight: 500; }
+    .btn-action {
+      color: var(--fg-0); background: #fffdfb; border-color: var(--bg-3);
+      padding: 7px 13px; border-radius: 999px; font-family: var(--font-sans); font-weight: 500;
+    }
+    .btn-action:hover { color: var(--accent); background: var(--bg-2); border-color: var(--accent); border-style: dashed; }
+    .btn-danger { color: var(--red); }
+    .test-result, .overlay-body pre { color: #f0e3de !important; background: #171717 !important; border-radius: 10px; }
+    .log-entry { border-bottom-color: var(--bg-2); }
+    .egress-stack { display: grid; gap: 8px; }
+    .egress-row { display: grid; grid-template-columns: 72px 1fr auto; align-items: center; gap: 8px; font-size: 11px; }
+    .egress-row code { color: var(--fg-0); font-family: var(--font-mono); }
+    .egress-row span { color: var(--fg-2); }
+    .egress-state { color: #15803d !important; font: 500 9px/1 var(--font-mono); text-transform: uppercase; letter-spacing: 0.04em; }
+
+    @media (max-width: 900px) {
+      .brand-copy span, .route-pill span { display: none; }
+      .route-pill { width: 30px; height: 30px; padding: 0; justify-content: center; }
+      .route-pill::before { margin: 0; }
+      #status-bar .shortcuts { display: none; }
+    }
+    @media (max-width: 640px) {
+      :root { --header-h: 52px; --status-h: 34px; --sidebar-w: min(84vw, 300px); }
+      #product-bar { padding: 0 10px; gap: 8px; }
+      .deck-link { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; font-size: 0; }
+      .deck-link::after { content: "\2197"; font-size: 14px; }
+      .security-route { gap: 4px; }
+      #ide { border: none; }
+      #sidebar { position: fixed !important; z-index: 150; top: var(--header-h); bottom: var(--status-h); left: 0; width: var(--sidebar-w); box-shadow: 18px 0 40px rgba(82, 16, 0, 0.12); }
+      #ide.sidebar-hidden #sidebar { display: none; }
+      #ide { grid-template-columns: 1fr var(--preview-w); grid-template-areas: "main preview" "aux preview"; }
+      #ide.preview-visible { --preview-w: 100vw !important; }
+      #ide.preview-visible #preview-area { position: fixed; inset: var(--header-h) 0 var(--status-h); z-index: 140; }
+      .overlay { width: 100vw; }
+      #status-bar { gap: 7px; padding: 0 10px; }
+      #sb-info, .status-sep { display: none; }
+    }
   </style>
 </head>
 <body>
+
+<header id="product-bar">
+  <div class="product-brand">
+    <div class="brand-mark" aria-hidden="true">&gt;_</div>
+    <div class="brand-copy">
+      <strong>Claudeflare Code</strong>
+      <span>isolated agent workspace</span>
+    </div>
+  </div>
+  <a class="deck-link" href="/slides/" target="_blank" rel="noopener">Open architecture deck &#8599;</a>
+  <div class="security-route" aria-label="Egress security controls">
+    <span class="route-pill"><span>HTTP inspected</span></span>
+    <span class="route-pill private"><span>TCP private only</span></span>
+    <span class="route-pill blocked"><span>Public egress blocked</span></span>
+  </div>
+</header>
 
 <!-- ═══════════════════════════════════════════════════════════════════════
      IDE Layout
@@ -396,6 +611,14 @@
       <div class="mgmt-row"><span class="label">User</span><span class="value" id="mgmt-user">--</span></div>
       <div class="mgmt-row"><span class="label">State</span><span class="value" id="mgmt-state">--</span></div>
       <div class="mgmt-row"><span class="label">Container</span><span class="value" id="mgmt-id" style="font-size:10px">--</span></div>
+    </div>
+    <div class="mgmt-section">
+      <h3>Zero Trust egress</h3>
+      <div class="egress-stack">
+        <div class="egress-row"><code>HTTP/S</code><span>Gateway inspection</span><span class="egress-state">enforced</span></div>
+        <div class="egress-row"><code>SSH/TCP</code><span>10.154.0.33 only</span><span class="egress-state">private</span></div>
+        <div class="egress-row"><code>Internet</code><span>Direct fallback</span><span class="egress-state">blocked</span></div>
+      </div>
     </div>
     <div class="mgmt-section">
       <h3>Actions</h3>
@@ -803,8 +1026,12 @@ refreshFiles();
 loadPreviewPort();
 setInterval(doRefreshStatus, 30000);
 
-// Sidebar visible by default, aux and preview hidden
-document.getElementById('btn-sidebar').classList.add('active');
+// Keep the workspace clear on small screens; the menu button opens Explorer.
+if (window.matchMedia('(max-width: 640px)').matches) {
+  ide.classList.add('sidebar-hidden');
+} else {
+  document.getElementById('btn-sidebar').classList.add('active');
+}
 </script>
 
 </body>
